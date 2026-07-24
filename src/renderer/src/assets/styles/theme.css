@@ -1,0 +1,17 @@
+/* 主题色彩变量 - 供 Ant Design Token 和自定义样式使用 */
+
+:root {
+  --color-primary: #1E6FCC;
+  --color-primary-light: #E8F2FF;
+  --color-primary-dark: #154F99;
+  --color-success: #1DB35E;
+  --color-warning: #FA8C16;
+  --color-error: #F5222D;
+  --color-info: #1890FF;
+  --agent-orchestrator: #722ED1;
+  --agent-aero: #1E6FCC;
+  --agent-structural: #FA8C16;
+  --agent-propulsion: #CF1322;
+  --agent-avionics: #08979C;
+  --agent-doc: #389E0D;
+}

@@ -1,0 +1,63 @@
+import { ipcMain, BrowserWindow } from 'electron'
+import {
+  listWorkspaces,
+  getCurrentWorkspace,
+  createWorkspace,
+  deleteWorkspace,
+  renameWorkspace,
+  switchWorkspace
+} from '../workspace'
+import { switchDatabase } from '../database'
+import { agentRegistry } from '../agents/agent-registry'
+import { registerCustomAgentsFromDB } from '../agents/custom-agents.service'
+import { mcpManager } from '../mcp/manager'
+import { clearAllSessions as clearPiSessions } from '../pi/session-manager'
+
+export function registerWorkspaceIPC(mainWindow: BrowserWindow): void {
+  ipcMain.handle('workspace:list', () => {
+    return listWorkspaces()
+  })
+
+  ipcMain.handle('workspace:current', () => {
+    return getCurrentWorkspace()
+  })
+
+  ipcMain.handle('workspace:switch', async (_event, id: string) => {
+    // 先断开当前工作区的所有 MCP 连接（注销其工具）
+    await mcpManager.stopAll()
+    // 清空 Pi sessions（不同工作区数据隔离）
+    try {
+      await clearPiSessions()
+    } catch (err) {
+      console.warn('[Workspace] Pi sessions clear failed:', err)
+    }
+    const newDbPath = switchWorkspace(id)
+    await switchDatabase(newDbPath)
+    // 重新注册自定义 Agent（清除旧工作区的，加载新工作区的）
+    agentRegistry.clearCustomAgents()
+    registerCustomAgentsFromDB()
+    // 启动新工作区的 MCP 服务器
+    try {
+      await mcpManager.startAll()
+    } catch (err) {
+      console.warn('[Workspace] MCP servers failed to start after switch:', err)
+    }
+    // Notify renderer to reload
+    mainWindow.webContents.send('workspace:changed', id)
+    return { success: true, dbPath: newDbPath }
+  })
+
+  ipcMain.handle('workspace:create', async (_event, name: string) => {
+    const ws = createWorkspace(name)
+    return ws
+  })
+
+  ipcMain.handle('workspace:delete', async (_event, id: string) => {
+    return deleteWorkspace(id)
+  })
+
+  ipcMain.handle('workspace:rename', async (_event, id: string, name: string) => {
+    const success = renameWorkspace(id, name)
+    return { success }
+  })
+}

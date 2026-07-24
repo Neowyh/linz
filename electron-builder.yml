@@ -1,0 +1,27 @@
+appId: com.linz.app
+productName: 临智 LINZ
+directories:
+  buildResources: resources
+files:
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron.vite.config.*'
+  - '!{.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+win:
+  executableName: linz
+  target:
+    - nsis
+nsis:
+  artifactName: ${name}-${version}-win7-setup.${ext}
+  shortcutName: ${productName}
+  uninstallDisplayName: ${productName}
+  # Win7 友好安装体验：非一键安装，让用户选路径
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  # 创建桌面快捷方式
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  # 自定义 NSIS 脚本：用于捆绑 VC++ redist 安装（占位，文件不存在则忽略）
+  # include: resources/nsis-installer.nsh

@@ -1,0 +1,283 @@
+import { useNavigate, useLocation } from 'react-router-dom'
+import { useEffect, useState, useMemo } from 'react'
+import {
+  PlusOutlined,
+  ClockCircleOutlined,
+  AppstoreOutlined,
+  FileTextOutlined,
+  TeamOutlined,
+  SettingOutlined,
+  MessageOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  SearchOutlined,
+  RobotOutlined,
+  RocketOutlined
+} from '@ant-design/icons'
+import { Popconfirm, Input, message } from 'antd'
+import { useConversationStore } from '../../stores/conversationStore'
+import { useSettingsStore } from '../../stores/settingsStore'
+import WorkspaceSwitcher from './WorkspaceSwitcher'
+
+interface NavItem {
+  icon: React.ReactNode
+  label: string
+  path: string
+}
+
+const mainNavItems: NavItem[] = [
+  { icon: <PlusOutlined />, label: '新建对话', path: '/chat' },
+  { icon: <ClockCircleOutlined />, label: '自动任务', path: '/auto-tasks' },
+  { icon: <AppstoreOutlined />, label: '模板广场', path: '/templates' },
+  { icon: <RobotOutlined />, label: '智能体管理', path: '/agents' }
+]
+
+const knowledgeItems: NavItem[] = [
+  { icon: <FileTextOutlined />, label: '文档库', path: '/knowledge' }
+]
+
+export default function Sidebar(): JSX.Element {
+  const navigate = useNavigate()
+  const location = useLocation()
+  const conversations = useConversationStore((s) => s.conversations)
+  const fetchConversations = useConversationStore((s) => s.fetchConversations)
+  const createConversation = useConversationStore((s) => s.createConversation)
+  const deleteConversation = useConversationStore((s) => s.deleteConversation)
+  const setShowSettings = useSettingsStore((s) => s.setShowSettings)
+  const loadSettings = useSettingsStore((s) => s.loadSettings)
+  const ollamaEnabled = useSettingsStore((s) => s.ollama.enabled)
+
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editTitle, setEditTitle] = useState('')
+  const [searchTerm, setSearchTerm] = useState('')
+  const [modelLabel, setModelLabel] = useState('DeepSeek')
+  const [modelProvider, setModelProvider] = useState<'cloud' | 'ollama' | 'offline'>('cloud')
+
+  const filteredConversations = useMemo(() => {
+    if (!searchTerm.trim()) return conversations
+    return conversations.filter((c) => (c.title || '新对话').toLowerCase().includes(searchTerm.toLowerCase()))
+  }, [conversations, searchTerm])
+
+  useEffect(() => {
+    fetchConversations()
+    loadSettings()
+    // Load model status
+    window.aeromind.ollama.status().then((status) => {
+      setModelProvider(status.provider as 'cloud' | 'ollama' | 'offline')
+      setModelLabel(status.label)
+    }).catch(() => {
+      setModelProvider('offline')
+      setModelLabel('离线')
+    })
+  }, [fetchConversations, loadSettings, ollamaEnabled])
+
+  const handleNewChat = async (): Promise<void> => {
+    const id = await createConversation()
+    navigate(`/chat/${id}`)
+  }
+
+  const isActive = (path: string): boolean => {
+    if (path === '/chat') {
+      return location.pathname === '/' || location.pathname.startsWith('/chat')
+    }
+    return location.pathname === path
+  }
+
+  const handleDelete = async (e: React.MouseEvent, id: string): Promise<void> => {
+    e.stopPropagation()
+    await deleteConversation(id)
+    // 如果当前正在查看该对话，导航到新对话页
+    if (location.pathname === `/chat/${id}`) {
+      navigate('/chat')
+    }
+    message.success('对话已删除')
+  }
+
+  const handleRename = (e: React.MouseEvent, id: string, currentTitle: string): void => {
+    e.stopPropagation()
+    setEditingId(id)
+    setEditTitle(currentTitle || '新对话')
+  }
+
+  const handleRenameSubmit = async (id: string): Promise<void> => {
+    if (editTitle.trim()) {
+      await window.aeromind.conversation.rename(id, editTitle.trim())
+      fetchConversations()
+    }
+    setEditingId(null)
+  }
+
+  return (
+    <div className="w-[260px] min-w-[260px] h-full flex flex-col bg-sidebar text-white">
+      {/* Logo */}
+      <div className="px-5 py-4 flex items-center gap-2">
+        <RocketOutlined className="text-2xl" />
+        <span className="text-base font-semibold tracking-wide">临智 LINZ</span>
+      </div>
+
+      {/* 工作区切换器 */}
+      <div className="px-3 mb-2">
+        <WorkspaceSwitcher />
+      </div>
+
+      {/* 全局搜索 */}
+      <div className="px-3 mb-2">
+        <Input
+          prefix={<SearchOutlined className="text-gray-500" />}
+          placeholder="搜索对话..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          className="bg-sidebar-hover border-sidebar-active text-gray-300 text-xs"
+          size="small"
+          allowClear
+        />
+      </div>
+
+      {/* 新建对话按钮 */}
+      <div className="px-3 mb-2">
+        <button
+          onClick={handleNewChat}
+          className="w-full py-2 px-4 rounded-btn bg-primary hover:bg-primary-dark text-white text-sm font-medium flex items-center gap-2 transition-colors"
+        >
+          <PlusOutlined /> 新建对话
+        </button>
+      </div>
+
+      {/* 主导航 */}
+      <nav className="flex-1 overflow-y-auto px-3">
+        <div className="space-y-0.5">
+          {mainNavItems.slice(1).map((item) => (
+            <button
+              key={item.path}
+              onClick={() => navigate(item.path)}
+              className={`w-full text-left py-2 px-4 rounded-btn text-sm flex items-center gap-3 transition-colors ${
+                isActive(item.path)
+                  ? 'bg-sidebar-active text-white'
+                  : 'text-gray-300 hover:bg-sidebar-hover hover:text-white'
+              }`}
+            >
+              {item.icon}
+              {item.label}
+            </button>
+          ))}
+        </div>
+
+        {/* 本地知识库 */}
+        <div className="mt-4">
+          <div className="px-4 py-1 text-xs text-gray-500 uppercase tracking-wider">本地知识库</div>
+          {knowledgeItems.map((item) => (
+            <button
+              key={item.path}
+              onClick={() => navigate(item.path)}
+              className={`w-full text-left py-2 px-4 rounded-btn text-sm flex items-center gap-3 transition-colors ${
+                isActive(item.path)
+                  ? 'bg-sidebar-active text-white'
+                  : 'text-gray-300 hover:bg-sidebar-hover hover:text-white'
+              }`}
+            >
+              {item.icon}
+              {item.label}
+            </button>
+          ))}
+        </div>
+
+        {/* 办公室 */}
+        <div className="mt-2">
+          <button
+            onClick={() => navigate('/office')}
+            className={`w-full text-left py-2 px-4 rounded-btn text-sm flex items-center gap-3 transition-colors ${
+              isActive('/office')
+                ? 'bg-sidebar-active text-white'
+                : 'text-gray-300 hover:bg-sidebar-hover hover:text-white'
+            }`}
+          >
+            <TeamOutlined />
+            办公室
+          </button>
+        </div>
+
+        {/* 最近对话 */}
+        <div className="mt-4">
+          <div className="px-4 py-1 text-xs text-gray-500 uppercase tracking-wider">最近对话</div>
+          <div className="space-y-0.5 max-h-[200px] overflow-y-auto">
+            {filteredConversations.map((conv) => (
+              <div
+                key={conv.id}
+                onClick={() => navigate(`/chat/${conv.id}`)}
+                className={`group w-full text-left py-1.5 px-3 rounded-btn text-xs flex items-center gap-2 transition-colors cursor-pointer ${
+                  location.pathname === `/chat/${conv.id}`
+                    ? 'bg-sidebar-active text-white'
+                    : 'text-gray-400 hover:bg-sidebar-hover hover:text-white'
+                }`}
+              >
+                <MessageOutlined className="text-[10px] flex-shrink-0" />
+                {editingId === conv.id ? (
+                  <Input
+                    size="small"
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                    onPressEnter={() => handleRenameSubmit(conv.id)}
+                    onBlur={() => handleRenameSubmit(conv.id)}
+                    className="flex-1"
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                ) : (
+                  <span className="truncate flex-1">{conv.title || '新对话'}</span>
+                )}
+                {/* 操作按钮，hover 时显示 */}
+                <div className="hidden group-hover:flex items-center gap-0.5 flex-shrink-0">
+                  <button
+                    onClick={(e) => handleRename(e, conv.id, conv.title || '')}
+                    className="p-0.5 text-gray-500 hover:text-white transition-colors"
+                    title="重命名"
+                  >
+                    <EditOutlined style={{ fontSize: 10 }} />
+                  </button>
+                  <Popconfirm
+                    title="确定删除此对话？"
+                    onConfirm={(e) => { if (e) handleDelete(e, conv.id) }}
+                    onCancel={(e) => e?.stopPropagation()}
+                    okText="删除"
+                    cancelText="取消"
+                  >
+                    <button
+                      onClick={(e) => e.stopPropagation()}
+                      className="p-0.5 text-gray-500 hover:text-red-400 transition-colors"
+                      title="删除"
+                    >
+                      <DeleteOutlined style={{ fontSize: 10 }} />
+                    </button>
+                  </Popconfirm>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </nav>
+
+      {/* 底部设置 + 模型状态 */}
+      <div className="px-3 py-3 border-t border-white/10">
+        {/* 模型状态指示器 */}
+        <div className="flex items-center gap-2 px-4 py-1.5 mb-1">
+          <span
+            className={`w-2 h-2 rounded-full flex-shrink-0 ${
+              modelProvider === 'cloud'
+                ? 'bg-green-400'
+                : modelProvider === 'ollama'
+                  ? 'bg-blue-400'
+                  : 'bg-gray-500'
+            }`}
+          />
+          <span className="text-xs text-gray-400 truncate">{modelLabel}</span>
+        </div>
+        <button
+          onClick={() => setShowSettings(true)}
+          className="w-full text-left py-2 px-4 rounded-btn text-sm flex items-center gap-3 text-gray-400 hover:bg-sidebar-hover hover:text-white transition-colors"
+        >
+          <SettingOutlined />
+          设置
+        </button>
+      </div>
+    </div>
+  )
+}

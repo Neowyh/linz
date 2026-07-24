@@ -1,0 +1,389 @@
+import { contextBridge, ipcRenderer } from 'electron'
+
+const api = {
+  chat: {
+    sendMessage: (conversationId: string, content: string, selectedAgent?: string, dispatchMode?: 'single' | 'collaborative'): void => {
+      ipcRenderer.send('chat:sendMessage', { conversationId, content, selectedAgent, dispatchMode })
+    },
+    onStreamChunk: (callback: (data: any) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: any): void => {
+        callback(data)
+      }
+      ipcRenderer.on('chat:streamChunk', handler)
+      return () => {
+        ipcRenderer.removeListener('chat:streamChunk', handler)
+      }
+    },
+    onStreamEnd: (callback: (data: any) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: any): void => {
+        callback(data)
+      }
+      ipcRenderer.on('chat:streamEnd', handler)
+      return () => {
+        ipcRenderer.removeListener('chat:streamEnd', handler)
+      }
+    },
+    onStreamError: (callback: (data: { error: string }) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { error: string }): void => {
+        callback(data)
+      }
+      ipcRenderer.on('chat:streamError', handler)
+      return () => {
+        ipcRenderer.removeListener('chat:streamError', handler)
+      }
+    },
+    abort: (): void => {
+      ipcRenderer.send('chat:abort')
+    },
+    uploadAttachment: (filePath: string): Promise<any> => {
+      return ipcRenderer.invoke('chat:uploadAttachment', filePath)
+    }
+  },
+
+  agent: {
+    onStatusUpdate: (callback: (data: any) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: any): void => {
+        callback(data)
+      }
+      ipcRenderer.on('agent:statusUpdate', handler)
+      return () => {
+        ipcRenderer.removeListener('agent:statusUpdate', handler)
+      }
+    },
+    onMessage: (callback: (data: any) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: any): void => {
+        callback(data)
+      }
+      ipcRenderer.on('agent:message', handler)
+      return () => {
+        ipcRenderer.removeListener('agent:message', handler)
+      }
+    },
+    listStates: (): Promise<any[]> => {
+      return ipcRenderer.invoke('agent:listStates')
+    },
+    availableTools: (): Promise<Array<{ name: string; description: string }>> => {
+      return ipcRenderer.invoke('agent:availableTools')
+    }
+  },
+
+  customAgent: {
+    list: (): Promise<any[]> => {
+      return ipcRenderer.invoke('agent:listCustom')
+    },
+    get: (id: string): Promise<any> => {
+      return ipcRenderer.invoke('agent:getCustom', id)
+    },
+    create: (params: any): Promise<{ success: boolean; agent?: any; error?: string }> => {
+      return ipcRenderer.invoke('agent:createCustom', params)
+    },
+    update: (id: string, updates: any): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke('agent:updateCustom', id, updates)
+    },
+    delete: (id: string): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke('agent:deleteCustom', id)
+    },
+    listBuiltin: (): Promise<any[]> => {
+      return ipcRenderer.invoke('agent:listBuiltin')
+    },
+    getBuiltin: (id: string): Promise<any> => {
+      return ipcRenderer.invoke('agent:getBuiltin', id)
+    },
+    updateBuiltin: (id: string, updates: any): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke('agent:updateBuiltin', id, updates)
+    },
+    resetBuiltin: (id: string): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke('agent:resetBuiltin', id)
+    }
+  },
+
+  agentSkill: {
+    list: (): Promise<any[]> => {
+      return ipcRenderer.invoke('agent-skill:list')
+    },
+    get: (id: string): Promise<any> => {
+      return ipcRenderer.invoke('agent-skill:get', id)
+    },
+    create: (params: any): Promise<{ success: boolean; skill?: any; error?: string }> => {
+      return ipcRenderer.invoke('agent-skill:create', params)
+    },
+    update: (id: string, updates: any): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke('agent-skill:update', id, updates)
+    },
+    delete: (id: string): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke('agent-skill:delete', id)
+    },
+    toggle: (id: string, enabled: boolean): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke('agent-skill:toggle', id, enabled)
+    }
+  },
+
+  conversation: {
+    list: (): Promise<any[]> => {
+      return ipcRenderer.invoke('conversation:list')
+    },
+    get: (id: string): Promise<any> => {
+      return ipcRenderer.invoke('conversation:get', id)
+    },
+    create: (title?: string): Promise<any> => {
+      return ipcRenderer.invoke('conversation:create', title)
+    },
+    delete: (id: string): Promise<{ success: boolean }> => {
+      return ipcRenderer.invoke('conversation:delete', id)
+    },
+    rename: (id: string, title: string): Promise<{ success: boolean }> => {
+      return ipcRenderer.invoke('conversation:rename', id, title)
+    }
+  },
+
+  settings: {
+    get: (key: string): Promise<any> => {
+      return ipcRenderer.invoke('settings:get', key)
+    },
+    set: (key: string, value: any): Promise<{ success: boolean }> => {
+      return ipcRenderer.invoke('settings:set', key, value)
+    }
+  },
+
+  autoTask: {
+    list: (): Promise<any[]> => {
+      return ipcRenderer.invoke('autoTask:list')
+    },
+    create: (task: { name: string; description?: string; cron_expression: string; agents?: string; result_action?: string }): Promise<any> => {
+      return ipcRenderer.invoke('autoTask:create', task)
+    },
+    update: (id: string, updates: any): Promise<{ success: boolean }> => {
+      return ipcRenderer.invoke('autoTask:update', id, updates)
+    },
+    delete: (id: string): Promise<{ success: boolean }> => {
+      return ipcRenderer.invoke('autoTask:delete', id)
+    },
+    toggle: (id: string): Promise<{ success: boolean }> => {
+      return ipcRenderer.invoke('autoTask:toggle', id)
+    },
+    onNotification: (callback: (data: any) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: any): void => {
+        callback(data)
+      }
+      ipcRenderer.on('autoTask:notification', handler)
+      return () => {
+        ipcRenderer.removeListener('autoTask:notification', handler)
+      }
+    }
+  },
+
+  template: {
+    list: (category?: string): Promise<any[]> => {
+      return ipcRenderer.invoke('template:list', category)
+    },
+    get: (id: string): Promise<any> => {
+      return ipcRenderer.invoke('template:get', id)
+    },
+    use: (id: string): Promise<any> => {
+      return ipcRenderer.invoke('template:use', id)
+    },
+    categories: (): Promise<string[]> => {
+      return ipcRenderer.invoke('template:categories')
+    },
+    create: (params: { name: string; description?: string; category: string; promptTemplate: string; agentType?: string[] }): Promise<any> => {
+      return ipcRenderer.invoke('template:create', params)
+    },
+    update: (id: string, updates: { name?: string; description?: string; category?: string; promptTemplate?: string; agentType?: string[] }): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke('template:update', id, updates)
+    },
+    delete: (id: string): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke('template:delete', id)
+    }
+  },
+
+  kb: {
+    listDocuments: (): Promise<any[]> => {
+      return ipcRenderer.invoke('kb:listDocuments')
+    },
+    uploadDocuments: (): Promise<any[]> => {
+      return ipcRenderer.invoke('kb:uploadDocuments')
+    },
+    search: (query: string, limit?: number): Promise<any[]> => {
+      return ipcRenderer.invoke('kb:search', query, limit)
+    },
+    deleteDocument: (id: string): Promise<{ success: boolean }> => {
+      return ipcRenderer.invoke('kb:deleteDocument', id)
+    },
+    stats: (): Promise<any> => {
+      return ipcRenderer.invoke('kb:stats')
+    },
+    categories: (): Promise<string[]> => {
+      return ipcRenderer.invoke('kb:categories')
+    },
+    listByCategory: (category: string): Promise<any[]> => {
+      return ipcRenderer.invoke('kb:listByCategory', category)
+    },
+    ask: (question: string): Promise<any> => {
+      return ipcRenderer.invoke('kb:ask', question)
+    },
+    semanticSearch: (query: string, options?: { domain?: string; limit?: number }): Promise<any[]> => {
+      return ipcRenderer.invoke('kb:semanticSearch', query, options)
+    },
+    embeddingStatus: (): Promise<boolean> => {
+      return ipcRenderer.invoke('kb:embeddingStatus')
+    },
+    generateEmbeddings: (): Promise<{ success: boolean; embedded?: number; error?: string }> => {
+      return ipcRenderer.invoke('kb:generateEmbeddings')
+    }
+  },
+
+  token: {
+    getUsage: (): Promise<{ inputTokens: number; outputTokens: number }> => {
+      return ipcRenderer.invoke('token:getUsage')
+    },
+    getBudget: (): Promise<{
+      monthlyLimit: number
+      warningThreshold: number
+      enabled: boolean
+      currentUsage: { inputTokens: number; outputTokens: number }
+      percentage: number
+    }> => {
+      return ipcRenderer.invoke('token:getBudget')
+    }
+  },
+
+  export: {
+    saveDialog: (options: { format: string; defaultPath?: string }): Promise<string | null> => {
+      return ipcRenderer.invoke('export:saveDialog', options)
+    },
+    word: (messages: any[], options?: any): Promise<string> => {
+      return ipcRenderer.invoke('export:word', messages, options)
+    },
+    pdf: (messages: any[], options?: any): Promise<string> => {
+      return ipcRenderer.invoke('export:pdf', messages, options)
+    },
+    saveFile: (filePath: string, dataBase64: string): Promise<{ success: boolean; filePath: string }> => {
+      return ipcRenderer.invoke('export:saveFile', filePath, dataBase64)
+    }
+  },
+
+  ollama: {
+    check: (): Promise<boolean> => {
+      return ipcRenderer.invoke('ollama:check')
+    },
+    status: (): Promise<{ provider: string; modelName: string; label: string }> => {
+      return ipcRenderer.invoke('ollama:status')
+    },
+    save: (config: { baseURL?: string; modelName?: string; enabled?: boolean }): Promise<{ success: boolean }> => {
+      return ipcRenderer.invoke('ollama:save', config)
+    }
+  },
+
+  fileWorkspace: {
+    pickFolder: (): Promise<string | null> => {
+      return ipcRenderer.invoke('fileWorkspace:pickFolder')
+    }
+  },
+
+  workspace: {
+    list: (): Promise<any[]> => {
+      return ipcRenderer.invoke('workspace:list')
+    },
+    current: (): Promise<any> => {
+      return ipcRenderer.invoke('workspace:current')
+    },
+    switch: (id: string): Promise<{ success: boolean; dbPath: string }> => {
+      return ipcRenderer.invoke('workspace:switch', id)
+    },
+    create: (name: string): Promise<any> => {
+      return ipcRenderer.invoke('workspace:create', name)
+    },
+    delete: (id: string): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke('workspace:delete', id)
+    },
+    rename: (id: string, name: string): Promise<{ success: boolean }> => {
+      return ipcRenderer.invoke('workspace:rename', id, name)
+    },
+    onChanged: (callback: (id: string) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, id: string): void => {
+        callback(id)
+      }
+      ipcRenderer.on('workspace:changed', handler)
+      return () => {
+        ipcRenderer.removeListener('workspace:changed', handler)
+      }
+    }
+  },
+
+  mcp: {
+    list: (): Promise<any[]> => {
+      return ipcRenderer.invoke('mcp:list')
+    },
+    get: (id: string): Promise<any> => {
+      return ipcRenderer.invoke('mcp:get', id)
+    },
+    create: (params: any): Promise<{ success: boolean; server?: any; error?: string }> => {
+      return ipcRenderer.invoke('mcp:create', params)
+    },
+    update: (id: string, updates: any): Promise<{ success: boolean; server?: any; error?: string }> => {
+      return ipcRenderer.invoke('mcp:update', id, updates)
+    },
+    delete: (id: string): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke('mcp:delete', id)
+    },
+    testConnection: (config: any): Promise<{ success: boolean; toolCount: number; tools: any[]; error?: string }> => {
+      return ipcRenderer.invoke('mcp:testConnection', config)
+    },
+    connect: (id: string): Promise<{ success: boolean; toolCount?: number; error?: string }> => {
+      return ipcRenderer.invoke('mcp:connect', id)
+    },
+    disconnect: (id: string): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke('mcp:disconnect', id)
+    },
+    listTools: (id: string): Promise<Array<{ name: string; description: string }>> => {
+      return ipcRenderer.invoke('mcp:listTools', id)
+    },
+    listTemplates: (): Promise<any[]> => {
+      return ipcRenderer.invoke('mcp:listTemplates')
+    },
+    detectPython: (): Promise<{ path: string | null }> => {
+      return ipcRenderer.invoke('mcp:detectPython')
+    },
+    detectCatiaServer: (): Promise<{ path: string | null; valid: boolean }> => {
+      return ipcRenderer.invoke('mcp:detectCatiaServer')
+    },
+    detectAbaqusServer: (): Promise<{ path: string | null; valid: boolean }> => {
+      return ipcRenderer.invoke('mcp:detectAbaqusServer')
+    }
+  },
+
+  terminal: {
+    spawn: (opts: { cwd?: string } = {}): Promise<{ sessionId: string }> => {
+      return ipcRenderer.invoke('terminal:spawn', opts)
+    },
+    write: (sessionId: string, data: string): void => {
+      ipcRenderer.send('terminal:write', { sessionId, data })
+    },
+    resize: (sessionId: string, cols: number, rows: number): void => {
+      ipcRenderer.send('terminal:resize', { sessionId, cols, rows })
+    },
+    kill: (sessionId: string): void => {
+      ipcRenderer.send('terminal:kill', { sessionId })
+    },
+    onData: (callback: (data: { sessionId: string; data: string }) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { sessionId: string; data: string }): void => {
+        callback(data)
+      }
+      ipcRenderer.on('terminal:data', handler)
+      return () => {
+        ipcRenderer.removeListener('terminal:data', handler)
+      }
+    },
+    onExit: (callback: (data: { sessionId: string; exitCode: number }) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { sessionId: string; exitCode: number }): void => {
+        callback(data)
+      }
+      ipcRenderer.on('terminal:exit', handler)
+      return () => {
+        ipcRenderer.removeListener('terminal:exit', handler)
+      }
+    }
+  }
+}
+
+contextBridge.exposeInMainWorld('aeromind', api)
