@@ -18,7 +18,7 @@ export default function AppLayout(): JSX.Element {
       <main
         className={`${
           mainHidden ? 'hidden' : 'flex-1'
-        } overflow-hidden bg-[#F5F5F7]`}
+        } overflow-hidden bg-[#F4F6FA]`}
       >
         <Outlet />
       </main>

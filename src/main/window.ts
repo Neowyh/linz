@@ -25,6 +25,7 @@ export function createMainWindow(): BrowserWindow {
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
+    console.log('[MainWin] windowOpenHandler:', details.url)
     shell.openExternal(details.url)
     return { action: 'deny' }
   })

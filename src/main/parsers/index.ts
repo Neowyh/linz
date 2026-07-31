@@ -20,6 +20,13 @@ export interface ParsedAttachment {
 }
 
 const MAX_CONTENT_LENGTH = 50000
+const DEFAULT_MAX_FILE_SIZE = 50 * 1024 * 1024
+const FULLTEXT_MAX_FILE_SIZE = 200 * 1024 * 1024
+
+export interface ParseFileOptions {
+  // 知识库批量导入模式：不做 5 万字符截断，单文件上限放宽到 200MB
+  fullText?: boolean
+}
 
 function getFileType(filePath: string): ParsedAttachment['fileType'] {
   const ext = path.extname(filePath).toLowerCase().replace('.', '')
@@ -29,9 +36,11 @@ function getFileType(filePath: string): ParsedAttachment['fileType'] {
   return supported.includes(ext as ParsedAttachment['fileType']) ? (ext as ParsedAttachment['fileType']) : 'unknown'
 }
 
-export async function parseFile(filePath: string): Promise<ParsedAttachment> {
+export async function parseFile(filePath: string, options?: ParseFileOptions): Promise<ParsedAttachment> {
   const fileName = path.basename(filePath)
   const fileType = getFileType(filePath)
+  const fullText = options?.fullText === true
+  const maxFileSize = fullText ? FULLTEXT_MAX_FILE_SIZE : DEFAULT_MAX_FILE_SIZE
 
   if (fileType === 'unknown') {
     // Try reading as plain text for unknown extensions
@@ -42,7 +51,7 @@ export async function parseFile(filePath: string): Promise<ParsedAttachment> {
         return {
           fileName,
           fileType: 'txt',
-          content: text.substring(0, MAX_CONTENT_LENGTH)
+          content: fullText ? text : text.substring(0, MAX_CONTENT_LENGTH)
         }
       }
     } catch {}
@@ -56,12 +65,12 @@ export async function parseFile(filePath: string): Promise<ParsedAttachment> {
 
   try {
     const stats = fs.statSync(filePath)
-    if (stats.size > 50 * 1024 * 1024) {
+    if (stats.size > maxFileSize) {
       return {
         fileName,
         fileType,
         content: '',
-        error: '文件过大（超过50MB），无法解析'
+        error: `文件过大（超过${Math.round(maxFileSize / 1024 / 1024)}MB），无法解析`
       }
     }
 
@@ -108,8 +117,8 @@ export async function parseFile(filePath: string): Promise<ParsedAttachment> {
         result = { content: '' }
     }
 
-    // Truncate if too long
-    if (result.content.length > MAX_CONTENT_LENGTH) {
+    // Truncate if too long（知识库导入 fullText 模式不截断）
+    if (!fullText && result.content.length > MAX_CONTENT_LENGTH) {
       result.content = result.content.substring(0, MAX_CONTENT_LENGTH) + '\n\n...(内容过长已截断)'
     }
 

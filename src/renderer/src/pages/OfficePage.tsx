@@ -186,7 +186,7 @@ export default function OfficePage(): JSX.Element {
 
       <div className="flex-1 flex gap-4 min-h-0">
         {/* 办公室动画场景 */}
-        <div className="flex-1 min-w-0 rounded-card border border-gray-100 shadow-sm overflow-hidden bg-white">
+        <div className="flex-1 min-w-0 rounded-card border border-line-light shadow-card overflow-hidden bg-white">
           {entries.length > 0 ? (
             <OfficeCanvas entries={entries} />
           ) : (
@@ -198,7 +198,7 @@ export default function OfficePage(): JSX.Element {
 
         {/* 右侧：Agent 列表 + 通信频道 */}
         <div className="w-80 flex-shrink-0 flex flex-col gap-4 min-h-0">
-          <div className="p-3 bg-white rounded-card border border-gray-100 shadow-sm flex-shrink-0">
+          <div className="p-3 bg-white rounded-card border border-line-light shadow-card flex-shrink-0">
             <h3 className="text-sm font-medium text-gray-900 mb-2">
               在岗 Agent
               <span className="ml-2 text-xs text-gray-500">（{filteredAgents.length}）</span>
@@ -218,7 +218,7 @@ export default function OfficePage(): JSX.Element {
             </div>
           </div>
 
-          <div className="flex-1 min-h-0 p-3 bg-white rounded-card border border-gray-100 shadow-sm flex flex-col">
+          <div className="flex-1 min-h-0 p-3 bg-white rounded-card border border-line-light shadow-card flex flex-col">
             <div className="flex items-center justify-between mb-3 flex-shrink-0">
               <h3 className="text-sm font-medium text-gray-900">
                 Agent 通信频道

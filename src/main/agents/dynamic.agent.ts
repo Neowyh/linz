@@ -22,6 +22,7 @@ export interface CustomAgentRow {
   created_at: string
   updated_at: string
   engine: string         // 'deepseek' | 'pi'
+  kb_tags: string        // JSON array string：知识库限定标签（knowledge_search 只检索这些标签的文档）
 }
 
 export class DynamicAgent extends BaseAgent {

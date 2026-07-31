@@ -118,6 +118,9 @@ export default function BrowserPanel(): JSX.Element {
         e.preventDefault?.()
       }
     }
+    // 注意：target="_blank" / window.open 的跳转不在此处处理——
+    // Electron 22 已移除 webview 的 new-window 事件，由主进程
+    // web-contents-created → setWindowOpenHandler 统一改为 webview 内打开（见 src/main/index.ts）
 
     webview.addEventListener('dom-ready', handleDomReady)
     webview.addEventListener('did-navigate', handleNavigate)

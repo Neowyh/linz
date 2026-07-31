@@ -1,6 +1,6 @@
 import { ipcMain, BrowserWindow } from 'electron'
 import { getDatabase, debounceSave, type AutoTask } from '../database'
-import { startJob, stopJob } from '../scheduler'
+import { startJob, stopJob, runTaskManually } from '../scheduler'
 import { v4 as uuidv4 } from 'uuid'
 
 function rowToAutoTask(row: any[]): AutoTask {
@@ -99,5 +99,10 @@ export function registerAutoTasksIPC(mainWindow: BrowserWindow): void {
     }
 
     return { success: true }
+  })
+
+  // 测试运行：立即手动触发一次，不等 cron 到点
+  ipcMain.handle('autoTask:test', async (_event, id: string) => {
+    return runTaskManually(id)
   })
 }

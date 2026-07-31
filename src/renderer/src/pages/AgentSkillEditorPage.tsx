@@ -183,9 +183,17 @@ export default function AgentSkillEditorPage(): JSX.Element {
                 rows={12}
                 className="font-mono text-sm"
               />
-              <Text type="secondary" className="text-xs mt-1 block">
-                这是真正注入到 Agent 系统提示词的过程性知识，会告诉 Agent 遇到匹配任务时该按什么步骤执行
-              </Text>
+              <div className="flex items-center justify-between mt-1">
+                <Text type="secondary" className="text-xs">
+                  这是真正注入到 Agent 系统提示词的过程性知识，会告诉 Agent 遇到匹配任务时该按什么步骤执行
+                </Text>
+                <Text
+                  className="text-xs flex-shrink-0 ml-2"
+                  type={content.length > 8000 ? 'danger' : 'secondary'}
+                >
+                  {content.length} 字{content.length > 8000 ? '，过长会显著增加每次调用的 token 消耗' : ''}
+                </Text>
+              </div>
             </div>
 
             <div className="flex items-center gap-4">

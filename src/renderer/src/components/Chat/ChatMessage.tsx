@@ -2,7 +2,7 @@ import { FileTextOutlined, FileWordOutlined, DownloadOutlined, ToolOutlined, Bul
 import { message as antdMessage, Collapse } from 'antd'
 import { useState } from 'react'
 import type { ChatMessage as ChatMessageType, ToolCallEntry } from '../../types/chat'
-import { AGENT_NAMES, AGENT_COLORS, AGENT_ICONS } from '../../types/agent'
+import { resolveAgentDisplaySnapshot } from '../../utils/agentDisplay'
 import MarkdownRenderer from '../Markdown/MarkdownRenderer'
 import AgentBadge from './AgentBadge'
 
@@ -146,7 +146,7 @@ export default function ChatMessage({ message }: ChatMessageProps): JSX.Element 
     : { displayText: message.content, attachments: [] as AttachmentCardData[] }
 
   const agentLabel = message.agentType
-    ? (AGENT_NAMES[message.agentType as keyof typeof AGENT_NAMES] || message.agentType)
+    ? resolveAgentDisplaySnapshot(message.agentType).name
     : '助手'
   const fileBase = `LINZ_${agentLabel}_${new Date().toISOString().slice(0, 10)}`
 
@@ -212,10 +212,10 @@ export default function ChatMessage({ message }: ChatMessageProps): JSX.Element 
         )}
 
         <div
-          className={`group relative rounded-card px-4 py-3 text-sm leading-relaxed ${
+          className={`group relative rounded-2xl px-4 py-3 text-sm leading-relaxed ${
             isUser
-              ? 'bg-primary text-white rounded-br-none'
-              : 'bg-white border border-gray-100 shadow-sm rounded-bl-none'
+              ? 'bg-primary text-white rounded-br-sm shadow-card'
+              : 'bg-white border border-line-light shadow-card rounded-bl-sm'
           }`}
         >
           {isUser ? (

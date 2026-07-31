@@ -1,14 +1,16 @@
 import { useEffect, useState } from 'react'
 import {
-  Button, Card, Tag, Empty, Popconfirm, Switch, message, Spin, Tooltip, Modal, Typography
+  Button, Card, Tag, Empty, Popconfirm, Switch, message, Spin, Tooltip, Modal, Typography, Dropdown
 } from 'antd'
 import {
-  PlusOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined, EyeOutlined
+  PlusOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined, EyeOutlined,
+  ImportOutlined, DownOutlined, CopyOutlined, DownloadOutlined
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { useAgentSkillStore } from '../stores/agentSkillStore'
 import { BUILTIN_AGENT_TYPES } from '../types/agentSkill'
 import type { AgentSkillData } from '../types/agentSkill'
+import ImportSkillsModal, { type SkillImportCandidate } from './ImportSkillsModal'
 
 const AGENT_LABEL: Record<string, string> = BUILTIN_AGENT_TYPES.reduce(
   (acc, item) => {
@@ -21,13 +23,68 @@ const AGENT_LABEL: Record<string, string> = BUILTIN_AGENT_TYPES.reduce(
 export default function AgentSkillsTab(): JSX.Element {
   const navigate = useNavigate()
   const {
-    skills, loading, fetchSkills, deleteSkill, toggleSkill
+    skills, loading, fetchSkills, deleteSkill, toggleSkill, createSkill
   } = useAgentSkillStore()
   const [viewSkill, setViewSkill] = useState<AgentSkillData | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
+  const [importCandidates, setImportCandidates] = useState<SkillImportCandidate[]>([])
+  const [importErrors, setImportErrors] = useState<string[]>([])
+  const [importParsing, setImportParsing] = useState(false)
 
   useEffect(() => {
     fetchSkills()
   }, [fetchSkills])
+
+  async function handleImportPick(kind: 'file' | 'folder'): Promise<void> {
+    const paths = kind === 'file'
+      ? await window.aeromind.agentSkill.importPick()
+      : await window.aeromind.agentSkill.importPickFolder()
+    if (!paths || paths.length === 0) return
+
+    setImportParsing(true)
+    try {
+      const { candidates, errors } = await window.aeromind.agentSkill.importParse(paths)
+      if (candidates.length === 0) {
+        message.warning(errors.length > 0 ? errors[0] : '未在所选来源中找到可导入的技能（SKILL.md）')
+        if (errors.length > 1) {
+          Modal.warning({ title: '解析失败详情', content: errors.join('\n') })
+        }
+        return
+      }
+      setImportCandidates(candidates)
+      setImportErrors(errors)
+      setImportOpen(true)
+    } catch (err: any) {
+      message.error(err?.message || '解析失败')
+    } finally {
+      setImportParsing(false)
+    }
+  }
+
+  async function handleDuplicate(skill: AgentSkillData): Promise<void> {
+    const result = await createSkill({
+      name: `${skill.name}（副本）`,
+      description: skill.description || '',
+      content: skill.content,
+      targetAgents: skill.target_agents || [],
+      triggerKeywords: skill.trigger_keywords || [],
+      priority: skill.priority
+    })
+    if (result.success) {
+      message.success(`已复制为自定义技能「${skill.name}（副本）」`)
+    } else {
+      message.error(result.error || '复制失败')
+    }
+  }
+
+  async function handleExport(skill: AgentSkillData): Promise<void> {
+    const result = await window.aeromind.agentSkill.exportSkill(skill.id)
+    if (result.success) {
+      message.success(`已导出到 ${result.filePath}`)
+    } else if (!result.canceled) {
+      message.error(result.error || '导出失败')
+    }
+  }
 
   async function handleDelete(id: string, name: string): Promise<void> {
     const result = await deleteSkill(id)
@@ -53,13 +110,28 @@ export default function AgentSkillsTab(): JSX.Element {
         <div className="text-sm text-gray-600">
           技能（过程性知识）会在 Agent 运行时自动注入到其系统提示词，告诉它"遇到 X 该怎么做"
         </div>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => navigate('/agent-skills/new')}
-        >
-          创建技能
-        </Button>
+        <div className="flex items-center gap-2">
+          <Dropdown
+            menu={{
+              items: [
+                { key: 'file', label: '从文件导入（.md / .zip）', onClick: () => handleImportPick('file') },
+                { key: 'folder', label: '从文件夹导入', onClick: () => handleImportPick('folder') }
+              ]
+            }}
+            trigger={['click']}
+          >
+            <Button icon={<ImportOutlined />} loading={importParsing}>
+              导入技能 <DownOutlined style={{ fontSize: 10 }} />
+            </Button>
+          </Dropdown>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => navigate('/agent-skills/new')}
+          >
+            创建技能
+          </Button>
+        </div>
       </div>
 
       {loading && skills.length === 0 ? (
@@ -146,24 +218,42 @@ export default function AgentSkillsTab(): JSX.Element {
                         onClick={() => setViewSkill(skill)}
                       />
                     </Tooltip>
-                    <Tooltip title={skill.is_builtin ? '内置技能不可编辑' : '编辑'}>
-                      <Button
-                        type="text"
-                        size="small"
-                        icon={<EditOutlined />}
-                        disabled={skill.is_builtin}
-                        onClick={() => navigate(`/agent-skills/${skill.id}/edit`)}
-                      />
-                    </Tooltip>
-                    {!skill.is_builtin && (
-                      <Popconfirm
-                        title={`确定删除技能「${skill.name}」？`}
-                        onConfirm={() => handleDelete(skill.id, skill.name)}
-                        okText="删除"
-                        cancelText="取消"
-                      >
-                        <Button type="text" size="small" icon={<DeleteOutlined />} danger />
-                      </Popconfirm>
+                    {skill.is_builtin ? (
+                      <Tooltip title="另存为自定义技能（可复制后修改）">
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<CopyOutlined />}
+                          onClick={() => handleDuplicate(skill)}
+                        />
+                      </Tooltip>
+                    ) : (
+                      <>
+                        <Tooltip title="导出为 SKILL.md">
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<DownloadOutlined />}
+                            onClick={() => handleExport(skill)}
+                          />
+                        </Tooltip>
+                        <Tooltip title="编辑">
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<EditOutlined />}
+                            onClick={() => navigate(`/agent-skills/${skill.id}/edit`)}
+                          />
+                        </Tooltip>
+                        <Popconfirm
+                          title={`确定删除技能「${skill.name}」？`}
+                          onConfirm={() => handleDelete(skill.id, skill.name)}
+                          okText="删除"
+                          cancelText="取消"
+                        >
+                          <Button type="text" size="small" icon={<DeleteOutlined />} danger />
+                        </Popconfirm>
+                      </>
                     )}
                   </div>
                 </div>
@@ -239,6 +329,14 @@ export default function AgentSkillsTab(): JSX.Element {
           </div>
         )}
       </Modal>
+      {/* 技能导入预览弹窗 */}
+      <ImportSkillsModal
+        open={importOpen}
+        candidates={importCandidates}
+        errors={importErrors}
+        onClose={() => setImportOpen(false)}
+        onImported={fetchSkills}
+      />
     </div>
   )
 }

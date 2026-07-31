@@ -17,6 +17,7 @@ export interface CustomAgentData {
   created_at: string
   updated_at: string
   engine: AgentEngine    // 底层 LLM 引擎：'deepseek' (LangChain 直连) | 'pi' (Pi SDK)
+  kb_tags: string        // JSON array string：知识库限定标签（knowledge_search 只检索这些标签的文档）
 }
 
 export type ToolSource = 'builtin' | 'mcp' | 'custom'

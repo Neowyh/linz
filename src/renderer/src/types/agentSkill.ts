@@ -11,6 +11,7 @@ export interface AgentSkillData {
   is_custom: boolean
   created_at: string
   updated_at: string
+  package_path?: string | null  // 导入技能包的落盘目录（含 scripts/），手动创建的技能为 null
 }
 
 export const BUILTIN_AGENT_TYPES: Array<{ value: string; label: string }> = [

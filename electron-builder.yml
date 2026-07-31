@@ -2,6 +2,10 @@ appId: com.linz.app
 productName: 临智 LINZ
 directories:
   buildResources: resources
+# 原生模块必须脱离 asar 打包（.node 二进制无法从 asar 加载）
+asarUnpack:
+  - '**/node_modules/better-sqlite3/**'
+  - '**/node_modules/node-pty/**'
 files:
   - '!**/.vscode/*'
   - '!src/*'

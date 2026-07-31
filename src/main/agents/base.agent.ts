@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid'
 import type { Tool } from '@langchain/core/tools'
-import { getEffectiveSkillsForAgent, formatSkillsForPrompt } from './agent-skills.service'
+import { getEffectiveSkillsForAgent, formatSkillsForPrompt, getSkillsByIds } from './agent-skills.service'
 import { createChatModel } from '../llm'
 import { streamChat } from '../llm/stream-handler'
 import { ensurePi } from '../pi'
@@ -84,6 +84,7 @@ export interface AgentContext {
   selectedAgent?: string  // UI 选择的 agent 类型（'general' 或具体专业 agent），由 chat.ipc 透传
   dispatchMode?: 'single' | 'collaborative'  // 调度模式：single=单Agent直连 | collaborative=协调器关键词并发调度
   fileWorkspacePath?: string  // 文件读写工具的合法根目录（用户在对话框下方"工作空间"按钮设置），未设置则 agent 无文件工具
+  forcedSkillIds?: string[]  // 用户在对话中通过 "/" 主动注入的技能 ID，绕过关键词匹配直接注入
 }
 
 // Agent 间主动通信协议（注入到每个 agent 的 system prompt 末尾）
@@ -216,8 +217,12 @@ export abstract class BaseAgent implements IAgent {
 
   // 在子类 systemPrompt 末尾追加通信协议 + 匹配的技能（过程性知识）
   // task 用于技能关键词匹配：无 task 时只注入"始终启用"类技能
-  protected getEffectiveSystemPrompt(task?: string): string {
-    const skills = getEffectiveSkillsForAgent(this.config.type, task || '')
+  // context.forcedSkillIds（用户 "/" 主动选择）绕过关键词/目标匹配，排最前且不受 top10 上限
+  protected getEffectiveSystemPrompt(task?: string, context?: AgentContext): string {
+    const forced = context?.forcedSkillIds?.length ? getSkillsByIds(context.forcedSkillIds) : []
+    const matched = getEffectiveSkillsForAgent(this.config.type, task || '')
+    const forcedIds = new Set(forced.map((s) => s.id))
+    const skills = [...forced, ...matched.filter((s) => !forcedIds.has(s.id))]
     const skillsSection = skills.length > 0 ? `\n\n${formatSkillsForPrompt(skills)}` : ''
     return `${this.systemPrompt}\n\n${AGENT_MESSAGING_PROTOCOL}${skillsSection}`
   }
@@ -244,7 +249,7 @@ export abstract class BaseAgent implements IAgent {
         agentType: this.config.type,
         agentName: this.config.name,
         agentColor: this.config.color,
-        systemPrompt: this.getEffectiveSystemPrompt(task),
+        systemPrompt: this.getEffectiveSystemPrompt(task, context),
         task: this.prepareTaskWithContext(task),
         ragContext: effectiveRag,
         customTools: this.getAvailableTools(context)
@@ -257,7 +262,7 @@ export abstract class BaseAgent implements IAgent {
     const tools = this.getAvailableTools(context)
 
     const stream = streamChat(llm, {
-      systemPrompt: this.getEffectiveSystemPrompt(task),
+      systemPrompt: this.getEffectiveSystemPrompt(task, context),
       userMessage: this.prepareTaskWithContext(task),
       chatHistory: buildChatHistory(context),
       ragContext: effectiveRag,

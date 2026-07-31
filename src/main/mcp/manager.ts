@@ -1,13 +1,19 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { DynamicStructuredTool } from '@langchain/core/tools'
 import type { Tool } from '@langchain/core/tools'
 import { z } from 'zod'
 import { v4 as uuidv4 } from 'uuid'
+import { spawn } from 'child_process'
+import fs from 'fs'
+import path from 'path'
 import { getDatabase, debounceSave } from '../database'
 import { toolRegistry } from '../agents/tools/registry'
 
-export type McpTransport = 'stdio' | 'http' | 'sse'
+export type McpTransport = 'stdio' | 'http' | 'sse' | 'cli'
 export type McpStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
 
 export interface McpServerConfig {
@@ -40,7 +46,7 @@ export interface McpToolInfo {
 }
 
 interface ConnectionEntry {
-  client: Client
+  client: Client | null
   tools: DynamicStructuredTool[]
   config: McpServerConfig
   status: McpStatus
@@ -49,6 +55,8 @@ interface ConnectionEntry {
 }
 
 const PING_INTERVAL_MS = 60_000
+const CLI_DEFAULT_TIMEOUT_MS = 120_000
+const CLI_MAX_OUTPUT_CHARS = 50_000
 const SERVER_COLUMNS =
   'id, name, description, icon, transport, command, args, cwd, env, url, enabled, auto_start, status, last_error, last_connected_at, tool_count, created_at, updated_at'
 
@@ -198,6 +206,111 @@ function createMcpTool(
   })
 }
 
+// 执行 CLI 命令：JSON 写入 stdin，收集 stdout/stderr 返回
+// 不用 shell，agent 输入只走 stdin，避免命令注入
+function runCliCommand(
+  config: McpServerConfig,
+  input: unknown
+): Promise<string> {
+  return new Promise((resolve) => {
+    const timeoutMs = Number(config.env?.TOOL_TIMEOUT_MS) || CLI_DEFAULT_TIMEOUT_MS
+    const env: Record<string, string> = {
+      PYTHONUNBUFFERED: '1',
+      PYTHONIOENCODING: 'utf-8',
+      ...(process.env as Record<string, string>),
+      ...(config.env || {})
+    }
+    delete env.TOOL_TIMEOUT_MS
+
+    let child
+    try {
+      child = spawn(config.command!, config.args || [], {
+        cwd: config.cwd || undefined,
+        env,
+        windowsHide: true
+      })
+    } catch (err: any) {
+      resolve(`CLI 启动失败: ${err.message || String(err)}`)
+      return
+    }
+
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    const finish = (text: string): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(text)
+    }
+    const timer = setTimeout(() => {
+      try {
+        child.kill()
+      } catch {
+        // ignore
+      }
+      finish(`CLI 执行超时（${Math.round(timeoutMs / 1000)}s），进程已终止\n已收集输出:\n${stdout}`)
+    }, timeoutMs)
+
+    child.stdout.on('data', (d) => {
+      stdout += d.toString()
+      if (stdout.length > CLI_MAX_OUTPUT_CHARS) {
+        stdout = stdout.slice(0, CLI_MAX_OUTPUT_CHARS) + '\n...[输出过长已截断]'
+        try {
+          child.kill()
+        } catch {
+          // ignore
+        }
+      }
+    })
+    child.stderr.on('data', (d) => {
+      stderr += d.toString()
+    })
+    child.on('error', (err) => {
+      finish(`CLI 启动失败: ${err.message}`)
+    })
+    child.on('close', (code) => {
+      const out = stdout.trim()
+      const errOut = stderr.trim()
+      if (code === 0) {
+        finish(out || '(命令执行成功，无输出)')
+      } else {
+        finish(
+          `CLI 退出码 ${code}\n${errOut ? `stderr:\n${errOut}\n` : ''}${out ? `stdout:\n${out}` : ''}`.trim()
+        )
+      }
+    })
+
+    // 写入 JSON 输入并关闭 stdin，通知程序输入结束
+    try {
+      child.stdin.write(JSON.stringify(input ?? {}))
+      child.stdin.end()
+    } catch (err: any) {
+      finish(`CLI 输入写入失败: ${err.message}`)
+    }
+  })
+}
+
+// CLI 传输：一条服务器配置 = 一个 CLI 工具
+// Agent 传入 JSON 对象，经 stdin 交给命令行程序，stdout 作为工具结果
+function createCliTool(config: McpServerConfig): DynamicStructuredTool {
+  const wrappedName = `mcp__${config.id}__run`
+  return new DynamicStructuredTool({
+    name: wrappedName,
+    description:
+      `[${config.name}] ${config.description || config.command || '命令行工具'}` +
+      '（参数以 JSON 对象形式传入，通过 stdin 交给命令行程序，返回其 stdout 输出）',
+    schema: z.object({
+      input: z
+        .record(z.any())
+        .describe('传给命令行程序的 JSON 参数对象，键值由该程序的接口约定决定')
+    }),
+    func: async ({ input }: { input: Record<string, unknown> }): Promise<string> => {
+      return await runCliCommand(config, input)
+    }
+  })
+}
+
 class McpConnectionManagerImpl {
   private connections: Map<string, ConnectionEntry> = new Map()
 
@@ -240,7 +353,35 @@ class McpConnectionManagerImpl {
 
     this.updateServerStatus(serverId, 'connecting', null, 0)
 
-    let transport: StdioClientTransport
+    // CLI 传输：无 MCP 协议连接，直接注册一个 stdin-JSON 工具
+    if (config.transport === 'cli') {
+      try {
+        if (!config.command) throw new Error('cli 传输需要 command 字段')
+        const tool = createCliTool(config)
+        toolRegistry.register(tool.name, tool as unknown as Tool, {
+          description: config.description || '',
+          source: 'mcp',
+          serverId,
+          serverName: config.name
+        })
+        this.connections.set(serverId, {
+          client: null,
+          tools: [tool],
+          config,
+          status: 'connected',
+          lastError: null,
+          pingTimer: null
+        })
+        this.updateServerStatus(serverId, 'connected', null, 1)
+        console.log(`[MCP] CLI tool "${config.name}" registered`)
+        return { toolCount: 1 }
+      } catch (err: any) {
+        this.updateServerStatus(serverId, 'error', err.message || String(err), 0)
+        throw err
+      }
+    }
+
+    let transport: Transport
     let client: Client
     try {
       transport = this.createTransport(config)
@@ -324,7 +465,7 @@ class McpConnectionManagerImpl {
     }
 
     try {
-      await (entry.client as any).close?.()
+      await entry.client?.close?.()
     } catch (err) {
       console.warn(`[MCP] Error closing client for ${serverId}:`, err)
     }
@@ -348,7 +489,24 @@ class McpConnectionManagerImpl {
     error?: string
   }> {
     const tempId = config.id || `temp-${uuidv4()}`
-    let transport: StdioClientTransport
+
+    // CLI 传输：只校验命令可解析，不实际执行（避免副作用）
+    if (config.transport === 'cli') {
+      if (!config.command) {
+        return { success: false, toolCount: 0, tools: [], error: 'cli 传输需要 command 字段' }
+      }
+      const probeError = await this.probeCliCommand(config)
+      if (probeError) {
+        return { success: false, toolCount: 0, tools: [], error: probeError }
+      }
+      return {
+        success: true,
+        toolCount: 1,
+        tools: [{ name: 'run', description: config.description || config.command }]
+      }
+    }
+
+    let transport: Transport
     let client: Client
     try {
       transport = this.createTransport({ ...config, id: tempId })
@@ -417,7 +575,7 @@ class McpConnectionManagerImpl {
     return !!entry && entry.status === 'connected'
   }
 
-  private createTransport(config: McpServerConfig): StdioClientTransport {
+  private createTransport(config: McpServerConfig): Transport {
     if (config.transport === 'stdio') {
       if (!config.command) {
         throw new Error('stdio 传输需要 command 字段')
@@ -439,13 +597,44 @@ class McpConnectionManagerImpl {
       }
       return new StdioClientTransport(options)
     }
-    throw new Error(`暂不支持的传输类型: ${config.transport}（本版本仅支持 stdio）`)
+    if (config.transport === 'sse') {
+      if (!config.url) {
+        throw new Error('sse 传输需要 url 字段')
+      }
+      return new SSEClientTransport(new URL(config.url))
+    }
+    if (config.transport === 'http') {
+      if (!config.url) {
+        throw new Error('http 传输需要 url 字段')
+      }
+      return new StreamableHTTPClientTransport(new URL(config.url))
+    }
+    throw new Error(`不支持的传输类型: ${config.transport}`)
+  }
+
+  // 探测 CLI 命令是否可解析（显式路径查文件，裸命令查 PATH），不实际执行
+  private async probeCliCommand(config: McpServerConfig): Promise<string | null> {
+    const cmd = config.command!
+    if (/[\\/]/.test(cmd)) {
+      const fullPath = path.isAbsolute(cmd)
+        ? cmd
+        : path.resolve(config.cwd || process.cwd(), cmd)
+      return fs.existsSync(fullPath) ? null : `命令文件不存在: ${fullPath}`
+    }
+    return await new Promise((resolve) => {
+      const probe = process.platform === 'win32' ? 'where' : 'which'
+      const p = spawn(probe, [cmd], { windowsHide: true })
+      p.on('close', (code) =>
+        resolve(code === 0 ? null : `PATH 中未找到命令: ${cmd}`)
+      )
+      p.on('error', (err) => resolve(`命令探测失败: ${err.message}`))
+    })
   }
 
   private startPing(serverId: string): NodeJS.Timeout {
     return setInterval(async () => {
       const entry = this.connections.get(serverId)
-      if (!entry || entry.status !== 'connected') return
+      if (!entry || entry.status !== 'connected' || !entry.client) return
       try {
         await entry.client.listTools()
       } catch (err: any) {

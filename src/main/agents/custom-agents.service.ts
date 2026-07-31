@@ -48,7 +48,7 @@ export function refreshCustomKeywordCache(): void {
 }
 
 // Explicit column list to avoid issues with ALTER TABLE column ordering
-const AGENT_COLUMNS = 'id, name, description, color, icon, system_prompt, tools, keywords, subtask_prefix, model_name, is_custom, usage_count, created_at, updated_at, delegates_to, engine'
+const AGENT_COLUMNS = 'id, name, description, color, icon, system_prompt, tools, keywords, subtask_prefix, model_name, is_custom, usage_count, created_at, updated_at, delegates_to, engine, kb_tags'
 
 function rowToCustomAgent(row: any[]): CustomAgentRow {
   return {
@@ -57,7 +57,8 @@ function rowToCustomAgent(row: any[]): CustomAgentRow {
     subtask_prefix: row[8], model_name: row[9], is_custom: row[10],
     usage_count: row[11], created_at: row[12], updated_at: row[13],
     delegates_to: row[14] || '[]',
-    engine: row[15] || 'deepseek'
+    engine: row[15] || 'deepseek',
+    kb_tags: row[16] || '[]'
   }
 }
 
@@ -123,7 +124,8 @@ export function isAgentNameTaken(name: string, excludeId?: string): boolean {
 export function createCustomAgent(params: {
   name: string; description?: string; color: string; icon: string;
   systemPrompt: string; tools: string[]; keywords: string[];
-  subtaskPrefix?: string; modelName?: string; engine?: 'deepseek' | 'pi'
+  subtaskPrefix?: string; modelName?: string; engine?: 'deepseek' | 'pi';
+  kbTags?: string[]
 }): CustomAgentRow {
   if (isAgentNameTaken(params.name)) {
     throw new Error(`Agent 名称 "${params.name}" 已存在，请使用其他名称`)
@@ -133,10 +135,11 @@ export function createCustomAgent(params: {
   const toolsJson = JSON.stringify(params.tools)
   const keywordsJson = JSON.stringify(params.keywords)
   const engine = params.engine || 'deepseek'
+  const kbTagsJson = JSON.stringify(Array.isArray(params.kbTags) ? params.kbTags : [])
 
   db.run(
-    `INSERT INTO custom_agents (id, name, description, color, icon, system_prompt, tools, keywords, subtask_prefix, model_name, engine) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, params.name, params.description || null, params.color, params.icon, params.systemPrompt, toolsJson, keywordsJson, params.subtaskPrefix || null, params.modelName || 'deepseek-chat', engine]
+    `INSERT INTO custom_agents (id, name, description, color, icon, system_prompt, tools, keywords, subtask_prefix, model_name, engine, kb_tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, params.name, params.description || null, params.color, params.icon, params.systemPrompt, toolsJson, keywordsJson, params.subtaskPrefix || null, params.modelName || 'deepseek-chat', engine, kbTagsJson]
   )
   debounceSave()
 
@@ -155,12 +158,12 @@ export function updateCustomAgent(id: string, updates: Record<string, any>): { s
     return { success: false, error: `Agent 名称 "${newName}" 已存在，请使用其他名称` }
   }
 
-  const allowedFields = ['name', 'description', 'color', 'icon', 'system_prompt', 'tools', 'keywords', 'subtask_prefix', 'model_name', 'delegates_to', 'engine']
+  const allowedFields = ['name', 'description', 'color', 'icon', 'system_prompt', 'tools', 'keywords', 'subtask_prefix', 'model_name', 'delegates_to', 'engine', 'kb_tags']
   const setClauses: string[] = []
   const values: any[] = []
 
   for (const [key, value] of Object.entries(updates)) {
-    const dbKey = key === 'systemPrompt' ? 'system_prompt' : key === 'subtaskPrefix' ? 'subtask_prefix' : key === 'modelName' ? 'model_name' : key
+    const dbKey = key === 'systemPrompt' ? 'system_prompt' : key === 'subtaskPrefix' ? 'subtask_prefix' : key === 'modelName' ? 'model_name' : key === 'kbTags' ? 'kb_tags' : key
     if (!allowedFields.includes(dbKey)) continue
     setClauses.push(`${dbKey} = ?`)
     values.push(typeof value === 'object' ? JSON.stringify(value) : value)
@@ -255,20 +258,20 @@ export function getBuiltinAgentOverrides(): Record<string, AgentOverrideConfig> 
 // Built-in agent CRUD
 export function getBuiltinAgentList(): any[] {
   const db = getDatabase()
-  const results = db.exec('SELECT id, name, description, color, icon, system_prompt, tools, keywords, delegates_to, subtask_prefix, model_name, is_custom, usage_count, created_at, updated_at, engine FROM custom_agents WHERE is_custom = 0 ORDER BY id')
+  const results = db.exec('SELECT id, name, description, color, icon, system_prompt, tools, keywords, delegates_to, subtask_prefix, model_name, is_custom, usage_count, created_at, updated_at, engine, kb_tags FROM custom_agents WHERE is_custom = 0 ORDER BY id')
   if (!results[0]) return []
   return results[0].values.map(row => ({
     id: row[0], name: row[1], description: row[2], color: row[3],
     icon: row[4], system_prompt: row[5], tools: row[6], keywords: row[7],
     delegates_to: row[8] ?? '[]', subtask_prefix: row[9], model_name: row[10],
     is_custom: row[11], usage_count: row[12], created_at: row[13], updated_at: row[14],
-    engine: row[15] || 'deepseek'
+    engine: row[15] || 'deepseek', kb_tags: row[16] || '[]'
   }))
 }
 
 export function getBuiltinAgent(id: string): any | null {
   const db = getDatabase()
-  const results = db.exec('SELECT id, name, description, color, icon, system_prompt, tools, keywords, delegates_to, subtask_prefix, model_name, is_custom, usage_count, created_at, updated_at, engine FROM custom_agents WHERE id = ? AND is_custom = 0', [id])
+  const results = db.exec('SELECT id, name, description, color, icon, system_prompt, tools, keywords, delegates_to, subtask_prefix, model_name, is_custom, usage_count, created_at, updated_at, engine, kb_tags FROM custom_agents WHERE id = ? AND is_custom = 0', [id])
   if (!results[0] || !results[0].values[0]) return null
   const row = results[0].values[0]
   return {
@@ -276,7 +279,7 @@ export function getBuiltinAgent(id: string): any | null {
     icon: row[4], system_prompt: row[5], tools: row[6], keywords: row[7],
     delegates_to: row[8] ?? '[]', subtask_prefix: row[9], model_name: row[10],
     is_custom: row[11], usage_count: row[12], created_at: row[13], updated_at: row[14],
-    engine: row[15] || 'deepseek'
+    engine: row[15] || 'deepseek', kb_tags: row[16] || '[]'
   }
 }
 
@@ -292,13 +295,14 @@ export function updateBuiltinAgent(id: string, updates: Record<string, any>): { 
     return { success: false, error: `Agent 名称 "${newName}" 已存在，请使用其他名称` }
   }
 
-  const allowedFields = ['name','description','color','icon','system_prompt','tools','keywords','delegates_to','subtask_prefix','model_name','engine']
+  const allowedFields = ['name','description','color','icon','system_prompt','tools','keywords','delegates_to','subtask_prefix','model_name','engine','kb_tags']
   const setClauses: string[] = []
   const values: any[] = []
 
   for (const [key, value] of Object.entries(updates)) {
-    if (!allowedFields.includes(key)) continue
-    setClauses.push(`${key} = ?`)
+    const dbKey = key === 'kbTags' ? 'kb_tags' : key
+    if (!allowedFields.includes(dbKey)) continue
+    setClauses.push(`${dbKey} = ?`)
     values.push(typeof value === 'object' ? JSON.stringify(value) : value)
   }
 

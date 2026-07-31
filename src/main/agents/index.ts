@@ -66,7 +66,8 @@ export class AgentEngine {
     signal: AbortSignal,
     selectedAgent?: string,
     fileWorkspacePath?: string,
-    dispatchMode?: 'single' | 'collaborative'
+    dispatchMode?: 'single' | 'collaborative',
+    forcedSkillIds?: string[]
   ): AsyncGenerator<StreamChunk> {
     // 从数据库加载对话历史，传递给 Agent 上下文
     const chatHistory: Array<{ role: string; content: string; agent_type?: string }> = []
@@ -105,7 +106,7 @@ export class AgentEngine {
       console.warn('[AgentEngine] Failed to load/compress chat history:', err)
     }
 
-    const context: AgentContext = { conversationId, signal, chatHistory, selectedAgent, fileWorkspacePath, dispatchMode }
+    const context: AgentContext = { conversationId, signal, chatHistory, selectedAgent, fileWorkspacePath, dispatchMode, forcedSkillIds }
 
     for await (const chunk of this.orchestrator.run(content, context)) {
       if (signal.aborted) break

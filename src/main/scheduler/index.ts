@@ -74,6 +74,21 @@ export function stopJob(taskId: string): void {
   }
 }
 
+// 手动触发一次任务执行（测试用），后台运行，结果照常走通知 + 会话持久化
+export function runTaskManually(taskId: string): { success: boolean; message?: string } {
+  if (runningTasks.has(taskId)) {
+    return { success: false, message: '任务正在执行中，请稍候' }
+  }
+  const db = getDatabase()
+  const row = db.exec('SELECT name, description, agents FROM auto_tasks WHERE id = ?', [taskId])
+  if (!row[0]?.values[0]) {
+    return { success: false, message: '任务不存在' }
+  }
+  const [name, description, agents] = row[0].values[0] as [string, string | null, string]
+  void executeTask(taskId, name, description || '', agents)
+  return { success: true }
+}
+
 // 执行任务
 async function executeTask(taskId: string, name: string, description: string, agentsStr: string): Promise<void> {
   // 重入保护：同一任务不并发执行

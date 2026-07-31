@@ -170,7 +170,7 @@ export default function TemplatesPage(): JSX.Element {
         ) : (
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
             {templates.map((template) => (
-              <div key={template.id} className="bg-white rounded-card border border-gray-100 p-4 shadow-sm hover:shadow-md transition-shadow">
+              <div key={template.id} className="bg-white rounded-card border border-line-light p-4 shadow-card hover:shadow-card-hover hover:-translate-y-0.5 transition-all">
                 <div className="flex items-start justify-between mb-2">
                   <h4 className="text-sm font-medium text-gray-900">{template.name}</h4>
                   <div className="flex items-center gap-1">

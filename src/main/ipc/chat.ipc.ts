@@ -5,6 +5,7 @@ import { isOverBudget, getBudgetPercentage, addTokenUsage, getAppConfig, getCurr
 import { estimateTokens } from '../llm'
 import { v4 as uuidv4 } from 'uuid'
 import { parseFile, formatAttachmentContent, type ParsedAttachment } from '../parsers'
+import type { ToolCallData } from '../agents/base.agent'
 
 let mainWindowRef: BrowserWindow | null = null
 let currentAbortController: AbortController | null = null
@@ -18,7 +19,7 @@ function getMainWindow(): BrowserWindow | null {
 export function registerChatIPC(mainWindow: BrowserWindow): void {
   mainWindowRef = mainWindow
 
-  ipcMain.on('chat:sendMessage', async (_event, { conversationId, content, selectedAgent, dispatchMode }) => {
+  ipcMain.on('chat:sendMessage', async (_event, { conversationId, content, selectedAgent, dispatchMode, skillIds }) => {
     // 中止之前的流，避免竞态
     if (currentAbortController) {
       currentAbortController.abort()
@@ -78,10 +79,11 @@ export function registerChatIPC(mainWindow: BrowserWindow): void {
       }
 
       const fileWorkspacePath = (getAppConfig().get('fileWorkspacePath') as string) || ''
-      const stream = engine.handleUserMessage(conversationId, content, myController.signal, selectedAgent, fileWorkspacePath, dispatchMode)
+      const stream = engine.handleUserMessage(conversationId, content, myController.signal, selectedAgent, fileWorkspacePath, dispatchMode, Array.isArray(skillIds) ? skillIds : undefined)
 
       // 按 messageId 聚合流式内容，用于最终持久化
-      const agentMessages = new Map<string, { agentType: string; content: string }>()
+      // 工具调用结构化累积，不再拼进 content（否则重载会话时工具结果以纯文本展开显示）
+      const agentMessages = new Map<string, { agentType: string; content: string; toolCalls: ToolCallData[] }>()
 
       for await (const chunk of stream) {
         if (myController.signal.aborted) break
@@ -104,31 +106,38 @@ export function registerChatIPC(mainWindow: BrowserWindow): void {
           win?.webContents.send('agent:message', chunk.agentMessage)
         }
 
-        // 聚合内容（包含工具调用最终结果，跳过执行中占位）
-        const existing = agentMessages.get(chunk.messageId)
-        let appendContent = chunk.content || ''
-        if (chunk.toolCall && chunk.toolCall.isComplete !== false) {
-          appendContent += `[🔧 工具调用: ${chunk.toolCall.tool}] 输入: ${chunk.toolCall.input}\n结果: ${chunk.toolCall.output}\n`
+        // 聚合内容（跳过执行中占位；完成的工具调用按 toolCallId 去重更新）
+        let msgData = agentMessages.get(chunk.messageId)
+        if (!msgData && (chunk.content || chunk.toolCall)) {
+          msgData = { agentType: chunk.agentType, content: '', toolCalls: [] }
+          agentMessages.set(chunk.messageId, msgData)
         }
-        if (appendContent) {
-          if (existing) {
-            existing.content += appendContent
-          } else {
-            agentMessages.set(chunk.messageId, { agentType: chunk.agentType, content: appendContent })
+        if (msgData) {
+          if (chunk.content) {
+            msgData.content += chunk.content
+          }
+          if (chunk.toolCall && chunk.toolCall.isComplete !== false) {
+            const tc = chunk.toolCall
+            const idx = tc.toolCallId ? msgData.toolCalls.findIndex((c) => c.toolCallId === tc.toolCallId) : -1
+            if (idx >= 0) {
+              msgData.toolCalls[idx] = tc
+            } else {
+              msgData.toolCalls.push(tc)
+            }
           }
         }
 
         // 流结束时持久化完整的 Agent 消息
         if (chunk.isComplete) {
           const msgData = agentMessages.get(chunk.messageId)
-          if (msgData && msgData.content) {
+          if (msgData && (msgData.content || msgData.toolCalls.length > 0)) {
             // strip <<<AGENT_MSG>>>...<<\/AGENT_MSG>>> 块，避免污染历史记录
             // （流式输出过程中对用户可见，但重载后不可见）
             const cleanContent = msgData.content.replace(
               /<<<AGENT_MSG>>>\s*[\s\S]*?<<<\/AGENT_MSG>>>/g,
               ''
             ).trim()
-            if (cleanContent) {
+            if (cleanContent || msgData.toolCalls.length > 0) {
               const outputTokens = Math.ceil(cleanContent.length / 4)
               messagesRepo.insert({
                 id: chunk.messageId,
@@ -136,7 +145,8 @@ export function registerChatIPC(mainWindow: BrowserWindow): void {
                 role: 'agent',
                 agent_type: msgData.agentType,
                 content: cleanContent,
-                tokens: outputTokens
+                tokens: outputTokens,
+                tool_calls: msgData.toolCalls.length > 0 ? JSON.stringify(msgData.toolCalls) : null
               })
               // 记录输出 token 使用量
               addTokenUsage(0, outputTokens)

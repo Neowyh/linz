@@ -5,12 +5,14 @@ import { is } from '@electron-toolkit/utils'
 import { createMainWindow } from './window'
 import { initDatabase, saveDatabase } from './database'
 import { seedBuiltinAgentSkills } from './database'
+import { initKbDatabase, closeKbDatabase, migrateLegacyKb } from './database/kb'
+import { initTablesDatabase, closeTablesDatabase } from './database/tables'
 import { refreshSkillCache } from './agents/agent-skills.service'
 import { registerAllIPC } from './ipc'
 import { registerAllAgents } from './agents'
 import { startAllSchedulers, stopAllSchedulers, setMainWindowForScheduler } from './scheduler'
 import { createTray, destroyTray } from './tray'
-import { initDefaultWorkspace, getWorkspaceDbPath } from './workspace'
+import { initDefaultWorkspace, getWorkspaceDbPath, getWorkspaceKbPath, getWorkspaceTablesPath } from './workspace'
 import { mcpManager } from './mcp/manager'
 import { disposeAll as disposePiSessions } from './pi/session-manager'
 
@@ -25,6 +27,28 @@ app.commandLine.appendSwitch('disable-renderer-backgrounding')
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
 app.commandLine.appendSwitch('disable-features', 'HardwareMediaKeyHandling,MediaSessionService')
 app.disableHardwareAcceleration()
+
+// 侧边栏浏览器 webview 里 target="_blank" / window.open 的跳转：
+// Electron 22 已移除 webContents/webview 的 new-window 事件，必须用 setWindowOpenHandler，
+// 否则点击这类链接毫无反应。让目标地址在 webview 自身内打开（仅 http/https），不弹新窗口。
+app.on('web-contents-created', (_event, contents) => {
+  console.log('[Browser] web-contents-created type=', contents.getType(), 'id=', contents.id)
+  if (contents.getType() !== 'webview') return
+  const installHandler = (): void => {
+    console.log('[Browser] install windowOpenHandler on guest', contents.id)
+    contents.setWindowOpenHandler(({ url }) => {
+      console.log('[Browser] windowOpenHandler:', url)
+      if (/^https?:\/\//i.test(url)) {
+        contents.loadURL(url).catch(() => {})
+      }
+      return { action: 'deny' }
+    })
+  }
+  installHandler()
+  // guest-view-manager 在 webview attach 时会覆盖 guest 的 windowOpenHandler，
+  // dom-ready 时重新安装（此时 attach 已完成）
+  contents.on('dom-ready', installHandler)
+})
 
 let mainWindow: BrowserWindow | null = null
 let ipcRegistered = false
@@ -43,6 +67,21 @@ app.whenReady().then(async () => {
   // 使用工作区数据库路径初始化数据库
   const dbPath = getWorkspaceDbPath()
   const db = await initDatabase(dbPath)
+
+  // 初始化知识库磁盘库（better-sqlite3 + FTS5），并迁移 sql.js 中的旧 KB 数据
+  try {
+    initKbDatabase(getWorkspaceKbPath())
+    migrateLegacyKb(db)
+  } catch (err) {
+    console.error('[Main] KB database init failed:', err)
+  }
+
+  // 初始化表格数据库（导入的 xlsx/csv 等结构化数据）
+  try {
+    initTablesDatabase(getWorkspaceTablesPath())
+  } catch (err) {
+    console.error('[Main] Tables database init failed:', err)
+  }
 
   // 种子内置技能并刷新技能缓存
   try {
@@ -112,6 +151,8 @@ app.on('before-quit', async (e) => {
     }
     stopAllSchedulers()
     saveDatabase()
+    closeKbDatabase()
+    closeTablesDatabase()
     destroyTray()
     app.quit()
   }

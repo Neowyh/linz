@@ -10,6 +10,7 @@ import ChatInput from '../components/Chat/ChatInput'
 import MessageList from '../components/Chat/MessageList'
 import TaskTemplate, { DEFAULT_TASK_TEMPLATES } from '../components/Chat/TaskTemplate'
 import AgentIcon from '../components/AgentIcon'
+import { resolveAgentDisplaySnapshot } from '../utils/agentDisplay'
 
 export default function ChatPage(): JSX.Element {
   const messages = useChatStore((s) => s.messages)
@@ -43,7 +44,7 @@ export default function ChatPage(): JSX.Element {
       if (msg.role === 'user') {
         md += `## 👤 用户\n\n${msg.content}\n\n`
       } else {
-        const agentLabel = msg.agentType ? `🤖 ${msg.agentType}` : '🤖 助手'
+        const agentLabel = msg.agentType ? `🤖 ${resolveAgentDisplaySnapshot(msg.agentType).name}` : '🤖 助手'
         md += `## ${agentLabel}\n\n${msg.content}\n\n`
       }
     }
@@ -162,19 +163,21 @@ export default function ChatPage(): JSX.Element {
         <LayoutOutlined />
       </button>
       {showWelcome ? (
-        <div className="flex-1 flex flex-col items-center justify-center px-6">
+        <div className="flex-1 flex flex-col items-center justify-center px-6 overflow-y-auto py-8">
           <div className="text-center mb-8">
-            <AgentIcon icon="assets/icons/orchestrator.svg" className="w-16 h-16 mx-auto mb-4" />
-            <h1 className="text-xl font-semibold text-gray-900 mb-2">临智 LINZ</h1>
-            <p className="text-gray-600 text-sm">为您的飞行器设计24小时待命</p>
+            <div className="w-20 h-20 mx-auto mb-4 rounded-2xl bg-white shadow-card flex items-center justify-center">
+              <AgentIcon icon="assets/icons/orchestrator.svg" className="w-12 h-12" />
+            </div>
+            <h1 className="text-2xl font-semibold text-gray-900 mb-1.5 tracking-wide">临智 LINZ</h1>
+            <p className="text-gray-500 text-sm">对话即设计 · 为您的飞行器设计 24 小时待命</p>
           </div>
 
           {!isConfigured && (
-            <div className="mb-6 p-4 bg-white border border-amber-400 rounded-card max-w-md text-center">
+            <div className="mb-6 p-4 bg-amber-50 border border-amber-300 rounded-card max-w-md text-center shadow-card">
               <p className="text-sm text-amber-700 mb-2">请先配置 API Key 以使用对话功能</p>
               <button
                 onClick={() => setShowSettings(true)}
-                className="px-4 py-1.5 bg-primary text-white rounded-btn text-sm hover:bg-primary-dark transition-colors"
+                className="px-4 py-1.5 bg-primary text-white rounded-btn text-sm hover:bg-primary-dark transition-colors shadow-card"
               >
                 前往设置
               </button>
@@ -186,7 +189,7 @@ export default function ChatPage(): JSX.Element {
           </div>
 
           <div className="w-full max-w-2xl">
-            <p className="text-xs text-gray-600 mb-3 text-center">推荐任务</p>
+            <p className="text-xs text-gray-400 mb-3 text-center tracking-wider">推荐任务</p>
             <div className="grid grid-cols-2 gap-3">
               {DEFAULT_TASK_TEMPLATES.map((tpl) => (
                 <TaskTemplate key={tpl.id} template={tpl} onClick={handleTemplateClick} />

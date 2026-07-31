@@ -1,5 +1,7 @@
 import type { AgentType } from '../../types/agent'
-import { AGENT_NAMES, AGENT_COLORS, AGENT_ICONS } from '../../types/agent'
+import { useAgentStore } from '../../stores/agentStore'
+import { useCustomAgentStore } from '../../stores/customAgentStore'
+import { resolveAgentDisplay } from '../../utils/agentDisplay'
 import AgentIcon from '../AgentIcon'
 
 interface AgentBadgeProps {
@@ -7,9 +9,9 @@ interface AgentBadgeProps {
 }
 
 export default function AgentBadge({ agentType }: AgentBadgeProps): JSX.Element {
-  const name = AGENT_NAMES[agentType] || agentType
-  const color = AGENT_COLORS[agentType] || '#999'
-  const icon = AGENT_ICONS[agentType] || 'assets/icons/orchestrator.svg'
+  const agents = useAgentStore((s) => s.agents)
+  const customAgents = useCustomAgentStore((s) => s.agents)
+  const { name, color, icon } = resolveAgentDisplay(agentType, agents, customAgents)
 
   return (
     <span

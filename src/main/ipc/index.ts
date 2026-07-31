@@ -6,6 +6,7 @@ import { registerAgentIPC } from './agent.ipc'
 import { registerAutoTasksIPC } from './autoTasks.ipc'
 import { registerTemplatesIPC } from './templates.ipc'
 import { registerKnowledgeIPC } from './knowledge.ipc'
+import { registerTablesIPC } from './tables.ipc'
 import { registerExportIPC } from './export.ipc'
 import { registerOllamaIPC } from './ollama.ipc'
 import { registerWorkspaceIPC } from './workspace.ipc'
@@ -23,6 +24,7 @@ export function registerAllIPC(mainWindow: BrowserWindow): void {
   registerAutoTasksIPC(mainWindow)
   registerTemplatesIPC(mainWindow)
   registerKnowledgeIPC(mainWindow)
+  registerTablesIPC(mainWindow)
   registerExportIPC(mainWindow)
   registerOllamaIPC()
   registerWorkspaceIPC(mainWindow)

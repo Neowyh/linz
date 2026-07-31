@@ -49,6 +49,16 @@ export function getWorkspaceDbPath(): string {
   return path.join(wsDir, 'data.db')
 }
 
+// 知识库独立磁盘库（better-sqlite3 + FTS5），与 data.db 同目录
+export function getWorkspaceKbPath(): string {
+  return path.join(path.dirname(getWorkspaceDbPath()), 'kb.db')
+}
+
+// 表格数据库（导入的 xlsx/csv 等结构化数据），与 data.db 同目录
+export function getWorkspaceTablesPath(): string {
+  return path.join(path.dirname(getWorkspaceDbPath()), 'tables.db')
+}
+
 export function switchWorkspace(id: string): string {
   setCurrentWorkspace(id)
   // Ensure directory exists

@@ -3,15 +3,15 @@ import path from 'path'
 
 const MAX_ROWS = 1000
 
-function detectDelimiter(line: string): string {
-  const counts: Record<string, number> = { ',': 0, '\t': 0, ';': 0 }
+export function detectDelimiter(line: string): string {
+  const counts: Record<string, number> = { ',': 0, '\t': 0, ';': 0, '|': 0 }
   for (const ch of line) {
     if (ch in counts) counts[ch]++
   }
   return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0]
 }
 
-function decodeBuffer(buffer: Buffer): string {
+export function decodeBuffer(buffer: Buffer): string {
   // Try UTF-8 first
   const utf8 = buffer.toString('utf-8')
   // Check for BOM

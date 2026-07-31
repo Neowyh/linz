@@ -2,8 +2,8 @@ import { contextBridge, ipcRenderer } from 'electron'
 
 const api = {
   chat: {
-    sendMessage: (conversationId: string, content: string, selectedAgent?: string, dispatchMode?: 'single' | 'collaborative'): void => {
-      ipcRenderer.send('chat:sendMessage', { conversationId, content, selectedAgent, dispatchMode })
+    sendMessage: (conversationId: string, content: string, selectedAgent?: string, dispatchMode?: 'single' | 'collaborative', skillIds?: string[]): void => {
+      ipcRenderer.send('chat:sendMessage', { conversationId, content, selectedAgent, dispatchMode, skillIds })
     },
     onStreamChunk: (callback: (data: any) => void): (() => void) => {
       const handler = (_event: Electron.IpcRendererEvent, data: any): void => {
@@ -115,6 +115,21 @@ const api = {
     },
     toggle: (id: string, enabled: boolean): Promise<{ success: boolean; error?: string }> => {
       return ipcRenderer.invoke('agent-skill:toggle', id, enabled)
+    },
+    importPick: (): Promise<string[]> => {
+      return ipcRenderer.invoke('agent-skill:importPick')
+    },
+    importPickFolder: (): Promise<string[]> => {
+      return ipcRenderer.invoke('agent-skill:importPickFolder')
+    },
+    importParse: (paths: string[]): Promise<{ candidates: any[]; errors: string[] }> => {
+      return ipcRenderer.invoke('agent-skill:importParse', paths)
+    },
+    importConfirm: (items: any[]): Promise<{ success: boolean; imported: number; names: string[]; error?: string }> => {
+      return ipcRenderer.invoke('agent-skill:importConfirm', items)
+    },
+    exportSkill: (id: string): Promise<{ success: boolean; filePath?: string; canceled?: boolean; error?: string }> => {
+      return ipcRenderer.invoke('agent-skill:export', id)
     }
   },
 
@@ -161,6 +176,9 @@ const api = {
     toggle: (id: string): Promise<{ success: boolean }> => {
       return ipcRenderer.invoke('autoTask:toggle', id)
     },
+    test: (id: string): Promise<{ success: boolean; message?: string }> => {
+      return ipcRenderer.invoke('autoTask:test', id)
+    },
     onNotification: (callback: (data: any) => void): (() => void) => {
       const handler = (_event: Electron.IpcRendererEvent, data: any): void => {
         callback(data)
@@ -203,11 +221,41 @@ const api = {
     uploadDocuments: (): Promise<any[]> => {
       return ipcRenderer.invoke('kb:uploadDocuments')
     },
-    search: (query: string, limit?: number): Promise<any[]> => {
-      return ipcRenderer.invoke('kb:search', query, limit)
+    pickImportPaths: (): Promise<string[]> => {
+      return ipcRenderer.invoke('kb:pickImportPaths')
+    },
+    importPaths: (paths: string[], tags?: string[], domain?: string): Promise<any> => {
+      return ipcRenderer.invoke('kb:importPaths', paths, tags, domain)
+    },
+    importStatus: (): Promise<{ running: boolean }> => {
+      return ipcRenderer.invoke('kb:importStatus')
+    },
+    onImportProgress: (callback: (data: any) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: any): void => {
+        callback(data)
+      }
+      ipcRenderer.on('kb:importProgress', handler)
+      return () => {
+        ipcRenderer.removeListener('kb:importProgress', handler)
+      }
+    },
+    updateTags: (docId: string, tags: string[]): Promise<{ success: boolean }> => {
+      return ipcRenderer.invoke('kb:updateTags', docId, tags)
+    },
+    updateDomain: (docId: string, domain: string): Promise<{ success: boolean }> => {
+      return ipcRenderer.invoke('kb:updateDomain', docId, domain)
+    },
+    tags: (): Promise<string[]> => {
+      return ipcRenderer.invoke('kb:tags')
+    },
+    search: (query: string, limit?: number, tags?: string[]): Promise<any[]> => {
+      return ipcRenderer.invoke('kb:search', query, limit, tags)
     },
     deleteDocument: (id: string): Promise<{ success: boolean }> => {
       return ipcRenderer.invoke('kb:deleteDocument', id)
+    },
+    deleteDocuments: (ids: string[]): Promise<{ success: boolean; deleted: number }> => {
+      return ipcRenderer.invoke('kb:deleteDocuments', ids)
     },
     stats: (): Promise<any> => {
       return ipcRenderer.invoke('kb:stats')
@@ -218,10 +266,10 @@ const api = {
     listByCategory: (category: string): Promise<any[]> => {
       return ipcRenderer.invoke('kb:listByCategory', category)
     },
-    ask: (question: string): Promise<any> => {
-      return ipcRenderer.invoke('kb:ask', question)
+    ask: (question: string, tags?: string[]): Promise<any> => {
+      return ipcRenderer.invoke('kb:ask', question, tags)
     },
-    semanticSearch: (query: string, options?: { domain?: string; limit?: number }): Promise<any[]> => {
+    semanticSearch: (query: string, options?: { domain?: string; limit?: number; tags?: string[] }): Promise<any[]> => {
       return ipcRenderer.invoke('kb:semanticSearch', query, options)
     },
     embeddingStatus: (): Promise<boolean> => {
@@ -229,6 +277,24 @@ const api = {
     },
     generateEmbeddings: (): Promise<{ success: boolean; embedded?: number; error?: string }> => {
       return ipcRenderer.invoke('kb:generateEmbeddings')
+    }
+  },
+
+  tables: {
+    list: (): Promise<any[]> => {
+      return ipcRenderer.invoke('tables:list')
+    },
+    import: (): Promise<any[]> => {
+      return ipcRenderer.invoke('tables:import')
+    },
+    preview: (tableName: string, limit?: number): Promise<any> => {
+      return ipcRenderer.invoke('tables:preview', tableName, limit)
+    },
+    remove: (datasetId: string): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke('tables:remove', datasetId)
+    },
+    query: (sql: string): Promise<any> => {
+      return ipcRenderer.invoke('tables:query', sql)
     }
   },
 

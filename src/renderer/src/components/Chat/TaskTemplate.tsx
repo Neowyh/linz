@@ -10,15 +10,17 @@ export default function TaskTemplate({ template, onClick }: TaskTemplateProps): 
   return (
     <button
       onClick={() => onClick(template.prompt)}
-      className="text-left p-4 rounded-card border border-gray-100 bg-white hover:border-primary hover:shadow-md transition-all group"
+      className="text-left p-4 rounded-card border border-line-light bg-white shadow-card hover:border-primary/40 hover:shadow-card-hover hover:-translate-y-0.5 transition-all group"
     >
       <div className="flex items-start gap-3">
-        <AgentIcon icon={template.icon} className="w-6 h-6" />
+        <div className="w-9 h-9 rounded-lg bg-primary-light flex items-center justify-center flex-shrink-0 group-hover:scale-105 transition-transform">
+          <AgentIcon icon={template.icon} className="w-5 h-5" />
+        </div>
         <div className="flex-1 min-w-0">
           <h4 className="text-sm font-medium text-gray-900 group-hover:text-primary transition-colors">
             {template.title}
           </h4>
-          <p className="text-xs text-gray-600 mt-1 line-clamp-2">{template.description}</p>
+          <p className="text-xs text-gray-500 mt-1 line-clamp-2 leading-relaxed">{template.description}</p>
         </div>
       </div>
     </button>

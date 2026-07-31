@@ -68,7 +68,7 @@ export class GeneralAgent extends BaseAgent {
           agentType: 'general',
           agentName: this.config.name,
           agentColor: this.config.color,
-          systemPrompt: this.getEffectiveSystemPrompt(task),
+          systemPrompt: this.getEffectiveSystemPrompt(task, context),
           task: this.prepareTaskWithContext(task),
           ragContext: context.ragContext,
           customTools: this.getAvailableTools(context)

@@ -161,8 +161,8 @@ export default function McpServerFormModal({ open, initial, template, onClose, o
       message.warning('请先填写名称和传输类型')
       return
     }
-    if (form.transport === 'stdio' && !form.command) {
-      message.warning('请填写 command (Python 路径)')
+    if ((form.transport === 'stdio' || form.transport === 'cli') && !form.command) {
+      message.warning('请填写 command (命令路径)')
       return
     }
     if ((form.transport === 'http' || form.transport === 'sse') && !form.url) {
@@ -206,7 +206,8 @@ export default function McpServerFormModal({ open, initial, template, onClose, o
     }
   }
 
-  const isStdio = form.transport === 'stdio'
+  const isCommandBased = form.transport === 'stdio' || form.transport === 'cli'
+  const isCli = form.transport === 'cli'
 
   return (
     <Modal
@@ -247,15 +248,24 @@ export default function McpServerFormModal({ open, initial, template, onClose, o
             value={form.transport}
             onChange={(v: McpTransport) => update('transport', v)}
             options={[
-              { value: 'stdio', label: 'stdio（本地子进程，如 Python MCP）' },
-              { value: 'http', label: 'http（Streamable HTTP）' },
-              { value: 'sse', label: 'sse（Server-Sent Events）' }
+              { value: 'stdio', label: 'stdio（本地 MCP 子进程，如 Python MCP）' },
+              { value: 'http', label: 'http（Streamable HTTP 远程服务）' },
+              { value: 'sse', label: 'sse（Server-Sent Events 远程服务）' },
+              { value: 'cli', label: 'cli（本地命令行工具，JSON 走 stdin）' }
             ]}
           />
         </Form.Item>
 
-        {isStdio ? (
+        {isCommandBased ? (
           <>
+            {isCli && (
+              <Alert
+                type="info"
+                className="mb-3"
+                message="CLI 工具调用方式"
+                description="Agent 调用时会生成一个 JSON 参数对象，通过 stdin 传给该命令行程序；程序处理后把结果打印到 stdout 即作为工具返回。默认超时 120s，可在环境变量中加 TOOL_TIMEOUT_MS 覆盖。"
+              />
+            )}
             <Form.Item
               label={
                 <Space>
@@ -270,11 +280,15 @@ export default function McpServerFormModal({ open, initial, template, onClose, o
               <Input
                 value={form.command || ''}
                 onChange={(e) => update('command', e.target.value)}
-                placeholder="例如 C:\\Python311\\python.exe 或 python"
+                placeholder={
+                  isCli
+                    ? '例如 C:\\tools\\struct_solver.exe 或 python'
+                    : '例如 C:\\Python311\\python.exe 或 python'
+                }
               />
             </Form.Item>
 
-            <Form.Item label="参数 (args，每行一个)">
+            <Form.Item label={isCli ? '参数 (args，每行一个，固定前缀参数)' : '参数 (args，每行一个)'}>
               <Input.TextArea
                 value={argsText}
                 onChange={(e) => setArgsText(e.target.value)}

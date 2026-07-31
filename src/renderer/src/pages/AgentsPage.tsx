@@ -115,10 +115,15 @@ function AgentsListTab(): JSX.Element {
       ) : (
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
           {displayBuiltinAgents.map((agent) => (
-            <div key={agent.type} className="bg-white rounded-card border border-gray-100 p-4 shadow-sm hover:shadow-md transition-shadow">
+            <div key={agent.type} className="bg-white rounded-card border border-line-light p-4 shadow-card hover:shadow-card-hover hover:-translate-y-0.5 transition-all">
               <div className="flex items-start justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <AgentIcon icon={agent.icon} className="w-5 h-5" />
+                <div className="flex items-center gap-2.5">
+                  <div
+                    className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+                    style={{ backgroundColor: agent.color + '14' }}
+                  >
+                    <AgentIcon icon={agent.icon} className="w-5 h-5" />
+                  </div>
                   <h4 className="text-sm font-medium text-gray-900">{agent.name}</h4>
                 </div>
                 <div className="flex items-center gap-1">
@@ -175,10 +180,15 @@ function AgentsListTab(): JSX.Element {
           ))}
 
           {agents.map((agent: CustomAgentData) => (
-            <div key={agent.id} className="bg-white rounded-card border border-gray-100 p-4 shadow-sm hover:shadow-md transition-shadow">
+            <div key={agent.id} className="bg-white rounded-card border border-line-light p-4 shadow-card hover:shadow-card-hover hover:-translate-y-0.5 transition-all">
               <div className="flex items-start justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <AgentIcon icon={agent.icon} className="w-5 h-5" />
+                <div className="flex items-center gap-2.5">
+                  <div
+                    className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+                    style={{ backgroundColor: (agent.color || '#1E6FCC') + '14' }}
+                  >
+                    <AgentIcon icon={agent.icon} className="w-5 h-5" />
+                  </div>
                   <h4 className="text-sm font-medium text-gray-900">{agent.name}</h4>
                 </div>
                 <div className="flex items-center gap-1">

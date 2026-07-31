@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { SendOutlined, PaperClipOutlined, SearchOutlined, StopOutlined, ExportOutlined, CloseOutlined, FileTextOutlined, LoadingOutlined, CheckCircleOutlined, ExclamationCircleOutlined, DownOutlined, RobotOutlined, FolderOpenOutlined } from '@ant-design/icons'
+import { SendOutlined, PaperClipOutlined, SearchOutlined, StopOutlined, ExportOutlined, CloseOutlined, FileTextOutlined, LoadingOutlined, CheckCircleOutlined, ExclamationCircleOutlined, DownOutlined, RobotOutlined, FolderOpenOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { message, Dropdown, Tooltip, Radio } from 'antd'
 import type { MenuProps } from 'antd'
 import { useCustomAgentStore } from '../../stores/customAgentStore'
 import { useChatStore } from '../../stores/chatStore'
+import { useAgentSkillStore } from '../../stores/agentSkillStore'
 import type { CustomAgentData } from '../../types/customAgent'
+import type { AgentSkillData } from '../../types/agentSkill'
 import AgentIcon from '../AgentIcon'
 
 interface AttachmentState {
@@ -26,7 +28,7 @@ interface AttachmentState {
 }
 
 interface ChatInputProps {
-  onSend: (content: string) => void
+  onSend: (content: string, skillIds?: string[]) => void
   onAbort: () => void
   isStreaming: boolean
   disabled?: boolean
@@ -89,6 +91,39 @@ export default function ChatInput({ onSend, onAbort, isStreaming, disabled, onEx
     if (customAgents.length === 0) fetchAgents()
   }, [builtinAgents.length, customAgents.length, fetchBuiltinAgents, fetchAgents])
 
+  // / 技能选择器状态（主动注入技能，随消息发送到主进程绕过关键词匹配直接注入）
+  const { skills, fetchSkills } = useAgentSkillStore()
+  const [selectedSkills, setSelectedSkills] = useState<AgentSkillData[]>([])
+  const [skillOpen, setSkillOpen] = useState(false)
+  const [skillQuery, setSkillQuery] = useState('')
+  const [skillStart, setSkillStart] = useState(0)
+  const [skillActiveIndex, setSkillActiveIndex] = useState(0)
+
+  useEffect(() => {
+    if (skills.length === 0) fetchSkills()
+  }, [skills.length, fetchSkills])
+
+  // 仅启用中的技能可注入
+  const selectableSkills = useMemo(() => skills.filter((s) => s.enabled), [skills])
+
+  // 按 query 过滤（匹配名称/描述/触发关键词，最多 8 项）
+  const filteredSkills = useMemo(() => {
+    const q = skillQuery.toLowerCase()
+    const filtered = q
+      ? selectableSkills.filter(
+          (s) =>
+            s.name.toLowerCase().includes(q) ||
+            (s.description || '').toLowerCase().includes(q) ||
+            (s.trigger_keywords || []).some((k) => k.toLowerCase().includes(q))
+        )
+      : selectableSkills
+    return filtered.slice(0, 8)
+  }, [selectableSkills, skillQuery])
+
+  useEffect(() => {
+    setSkillActiveIndex(0)
+  }, [skillQuery])
+
   // 可 @ 的 agent 列表：内置 + 自定义（含 orchestrator，允许用户显式指定）
   const availableAgents = useMemo<CustomAgentData[]>(() => {
     return [
@@ -135,32 +170,50 @@ export default function ChatInput({ onSend, onAbort, isStreaming, disabled, onEx
       }
     }
 
-    onSend(parts.join('\n\n'))
+    // 主动注入的技能：marker 行便于历史记录回溯 + 让模型感知技能来源
+    const skillIds = selectedSkills.map((s) => s.id)
+    if (selectedSkills.length > 0) {
+      parts.unshift(`[主动注入技能: ${selectedSkills.map((s) => s.name).join('、')}]`)
+    }
+
+    onSend(parts.join('\n\n'), skillIds.length > 0 ? skillIds : undefined)
     setInput('')
     setAttachments([])
+    setSelectedSkills([])
     setMentionOpen(false)
+    setSkillOpen(false)
   }
 
-  // 检测光标前的 @mention 模式：要求 @ 在行首或空格之后（避免 email 误触发）
-  const detectMention = (value: string, cursor: number): void => {
+  // 检测光标前的触发模式：@mention 与 /技能，要求符号在行首或空格之后（避免 email、路径误触发）
+  const detectTriggers = (value: string, cursor: number): void => {
     const textBefore = value.slice(0, cursor)
-    const match = textBefore.match(/(^|\s)@([\w一-龥-]*)$/)
-    if (match) {
-      const query = match[2]
-      const atPosition = cursor - query.length - 1 // @ 字符的位置
+    const mentionMatch = textBefore.match(/(^|\s)@([\w一-龥-]*)$/)
+    if (mentionMatch) {
+      const query = mentionMatch[2]
       setMentionOpen(true)
       setMentionQuery(query)
-      setMentionStart(atPosition)
-    } else {
-      setMentionOpen(false)
+      setMentionStart(cursor - query.length - 1)
+      setSkillOpen(false)
+      return
     }
+    setMentionOpen(false)
+
+    const skillMatch = textBefore.match(/(^|\s)\/([\w一-龥-]*)$/)
+    if (skillMatch) {
+      const query = skillMatch[2]
+      setSkillOpen(true)
+      setSkillQuery(query)
+      setSkillStart(cursor - query.length - 1)
+      return
+    }
+    setSkillOpen(false)
   }
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>): void => {
     const value = e.target.value
     const cursor = e.target.selectionStart ?? value.length
     setInput(value)
-    detectMention(value, cursor)
+    detectTriggers(value, cursor)
   }
 
   // 选中某个 agent，把 @query 替换为 @agent.id（带尾随空格）
@@ -177,6 +230,22 @@ export default function ChatInput({ onSend, onAbort, isStreaming, disabled, onEx
         const newCursor = before.length + insertion.length
         textareaRef.current.focus()
         textareaRef.current.setSelectionRange(newCursor, newCursor)
+      }
+    }, 0)
+  }
+
+  // 选中某个技能：去掉 /query 文本，技能以 chip 形式挂在输入框上方（不污染正文）
+  const selectSkill = (skill: AgentSkillData): void => {
+    const before = input.slice(0, skillStart)
+    const after = input.slice(skillStart + 1 + skillQuery.length)
+    const newValue = before + after
+    setInput(newValue)
+    setSkillOpen(false)
+    setSelectedSkills((prev) => (prev.some((s) => s.id === skill.id) ? prev : [...prev, skill]))
+    setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus()
+        textareaRef.current.setSelectionRange(before.length, before.length)
       }
     }, 0)
   }
@@ -202,6 +271,29 @@ export default function ChatInput({ onSend, onAbort, isStreaming, disabled, onEx
       if (e.key === 'Escape') {
         e.preventDefault()
         setMentionOpen(false)
+        return
+      }
+    }
+    // / 技能选择器开启时优先处理导航键
+    if (skillOpen && filteredSkills.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSkillActiveIndex((prev) => (prev + 1) % filteredSkills.length)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSkillActiveIndex((prev) => (prev - 1 + filteredSkills.length) % filteredSkills.length)
+        return
+      }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault()
+        selectSkill(filteredSkills[skillActiveIndex])
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSkillOpen(false)
         return
       }
     }
@@ -295,8 +387,29 @@ export default function ChatInput({ onSend, onAbort, isStreaming, disabled, onEx
   const allParsed = attachments.every((a) => a.status !== 'parsing')
 
   return (
-    <div className="border-t border-gray-200 bg-white p-4">
+    <div className="px-4 pb-4 pt-1">
       <div className="max-w-3xl mx-auto">
+        {/* 已选技能 chips（/ 主动注入） */}
+        {selectedSkills.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-2">
+            {selectedSkills.map((skill) => (
+              <div
+                key={skill.id}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs border-purple-300 bg-purple-50 text-purple-700"
+              >
+                <ThunderboltOutlined />
+                <span className="max-w-[180px] truncate">{skill.name}</span>
+                <button
+                  onClick={() => setSelectedSkills((prev) => prev.filter((s) => s.id !== skill.id))}
+                  className="ml-0.5 hover:text-red-500 transition-colors"
+                >
+                  <CloseOutlined style={{ fontSize: 10 }} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Attachment cards */}
         {attachments.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-2">
@@ -336,10 +449,10 @@ export default function ChatInput({ onSend, onAbort, isStreaming, disabled, onEx
           </div>
         )}
 
-        <div className="relative flex items-end gap-2 rounded-card border border-gray-200 bg-white p-3 shadow-sm focus-within:border-primary focus-within:shadow-md transition-all">
+        <div className="relative flex items-end gap-2 rounded-card border border-line bg-white p-3 shadow-card focus-within:border-primary focus-within:shadow-focus-ring transition-all">
           {/* @ 自动补全下拉列表 */}
           {mentionOpen && (
-            <div className="absolute bottom-full left-0 right-0 mb-2 bg-white rounded-card border border-gray-200 shadow-lg max-h-64 overflow-y-auto z-50">
+            <div className="absolute bottom-full left-0 right-0 mb-2 bg-white rounded-card border border-line shadow-popover max-h-64 overflow-y-auto z-50">
               {filteredAgents.length === 0 ? (
                 <div className="px-3 py-3 text-sm text-gray-400 text-center">
                   {availableAgents.length === 0
@@ -386,6 +499,49 @@ export default function ChatInput({ onSend, onAbort, isStreaming, disabled, onEx
             </div>
           )}
 
+          {/* / 技能选择下拉列表 */}
+          {skillOpen && (
+            <div className="absolute bottom-full left-0 right-0 mb-2 bg-white rounded-card border border-line shadow-popover max-h-64 overflow-y-auto z-50">
+              {filteredSkills.length === 0 ? (
+                <div className="px-3 py-3 text-sm text-gray-400 text-center">
+                  {selectableSkills.length === 0
+                    ? '暂无可用技能，可先在 Agent 管理中创建或导入'
+                    : `未找到匹配 "${skillQuery}" 的技能`}
+                </div>
+              ) : (
+                filteredSkills.map((skill, idx) => (
+                  <button
+                    key={skill.id}
+                    type="button"
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      selectSkill(skill)
+                    }}
+                    className={`w-full flex items-center gap-3 px-3 py-2 text-left transition-colors border-b border-gray-50 last:border-b-0 ${
+                      idx === skillActiveIndex ? 'bg-purple-50' : 'hover:bg-gray-50'
+                    }`}
+                  >
+                    <ThunderboltOutlined style={{ color: '#722ED1', flexShrink: 0 }} />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-gray-900 truncate">
+                        {skill.name}
+                        {(skill.trigger_keywords || []).length === 0 && (
+                          <span className="ml-2 text-xs text-green-500">始终启用</span>
+                        )}
+                      </div>
+                      {skill.description && (
+                        <div className="text-xs text-gray-500 truncate">{skill.description}</div>
+                      )}
+                    </div>
+                    {idx === skillActiveIndex && (
+                      <span className="text-xs text-purple-500 flex-shrink-0">Enter</span>
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+
           {/* 附件按钮 */}
           <button
             onClick={handleFileSelect}
@@ -401,8 +557,8 @@ export default function ChatInput({ onSend, onAbort, isStreaming, disabled, onEx
             value={input}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
-            onBlur={() => setTimeout(() => setMentionOpen(false), 150)}
-            placeholder="请描述您的飞行器设计任务…（输入 @ 选择 Agent）"
+            onBlur={() => setTimeout(() => { setMentionOpen(false); setSkillOpen(false) }, 150)}
+            placeholder="请描述您的飞行器设计任务…（输入 @ 选择 Agent，/ 注入技能）"
             disabled={disabled}
             rows={1}
             className="flex-1 resize-none outline-none text-sm text-gray-900 placeholder:text-gray-300 min-h-[36px] max-h-[160px]"

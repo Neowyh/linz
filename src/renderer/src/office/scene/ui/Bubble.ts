@@ -1,5 +1,8 @@
 import { Container, Graphics, Text } from 'pixi.js'
 
+/** 与 StatusLabel 相同：高 resolution 栅格化，避免场景缩放后文字发虚 */
+const TEXT_RESOLUTION = 3
+
 const BUBBLE_STYLE = {
   fontFamily: 'system-ui, -apple-system, sans-serif',
   fontSize: 11,
@@ -17,7 +20,7 @@ export class Bubble extends Container {
   constructor() {
     super()
     this.bg = new Graphics()
-    this.messageText = new Text({ text: '', style: BUBBLE_STYLE })
+    this.messageText = new Text({ text: '', style: BUBBLE_STYLE, resolution: TEXT_RESOLUTION })
     this.messageText.anchor.set(0.5, 0.5)
     this.addChild(this.bg, this.messageText)
     this.visible = false

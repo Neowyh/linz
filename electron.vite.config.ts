@@ -72,11 +72,17 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {
+        input: {
+          index: resolve('src/main/index.ts'),
+          // 知识库批量导入的解析 worker（utilityProcess.fork 加载 out/main/parse-worker.js）
+          'parse-worker': resolve('src/main/kb/parse-worker.ts')
+        },
         external: [
           '@xenova/transformers',
           '@modelcontextprotocol/sdk',
           '@langchain/mcp-adapters',
           'node-pty',
+          'better-sqlite3',
           '@earendil-works/pi-coding-agent'
         ],
         output: {

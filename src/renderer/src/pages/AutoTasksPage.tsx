@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { Button, Modal, Form, Input, Select, Switch, Tag, Empty, message } from 'antd'
-import { PlusOutlined, ClockCircleOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons'
+import { Button, Modal, Form, Input, Select, Switch, Tag, Empty, message, notification } from 'antd'
+import { PlusOutlined, DeleteOutlined, PlayCircleOutlined } from '@ant-design/icons'
 
 interface AutoTaskData {
   id: string
@@ -45,6 +45,7 @@ export default function AutoTasksPage(): JSX.Element {
   const [tasks, setTasks] = useState<AutoTaskData[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
+  const [testingIds, setTestingIds] = useState<Set<string>>(new Set())
   const [form] = Form.useForm()
 
   const fetchTasks = async (): Promise<void> => {
@@ -60,6 +61,45 @@ export default function AutoTasksPage(): JSX.Element {
   }
 
   useEffect(() => { fetchTasks() }, [])
+
+  // 任务执行完成（含测试运行）时页面内弹出结果摘要，并刷新运行次数
+  useEffect(() => {
+    const unsubscribe = window.aeromind.autoTask.onNotification((data: { title?: string; body?: string }) => {
+      notification.info({
+        message: `自动任务完成：${data.title || ''}`,
+        description: data.body || '',
+        placement: 'bottomRight',
+        duration: 8
+      })
+      setTestingIds(new Set())
+      fetchTasks()
+    })
+    return unsubscribe
+  }, [])
+
+  const handleTest = async (task: AutoTaskData): Promise<void> => {
+    setTestingIds((prev) => new Set(prev).add(task.id))
+    try {
+      const result = await window.aeromind.autoTask.test(task.id)
+      if (result?.success) {
+        message.success(`已开始测试运行「${task.name}」，完成后将弹出结果摘要`)
+      } else {
+        message.warning(result?.message || '测试运行失败')
+        setTestingIds((prev) => {
+          const next = new Set(prev)
+          next.delete(task.id)
+          return next
+        })
+      }
+    } catch {
+      message.error('测试运行失败')
+      setTestingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(task.id)
+        return next
+      })
+    }
+  }
 
   const handleCreate = async (values: any): Promise<void> => {
     try {
@@ -138,7 +178,7 @@ export default function AutoTasksPage(): JSX.Element {
             <Empty description="暂无自动任务" />
           ) : (
             tasks.map((task) => (
-              <div key={task.id} className="bg-white rounded-card border border-gray-100 p-4 shadow-sm">
+              <div key={task.id} className="bg-white rounded-card border border-line-light p-4 shadow-card">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <Switch
@@ -154,6 +194,16 @@ export default function AutoTasksPage(): JSX.Element {
                   <div className="flex items-center gap-3">
                     <Tag color="blue">{getCronLabel(task.cron_expression)}</Tag>
                     <span className="text-xs text-gray-300">已运行{task.run_count}次</span>
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<PlayCircleOutlined />}
+                      loading={testingIds.has(task.id)}
+                      onClick={() => handleTest(task)}
+                      title="立即测试运行一次，无需等到计划时间"
+                    >
+                      测试
+                    </Button>
                     <Button type="text" size="small" icon={<DeleteOutlined />} onClick={() => handleDelete(task.id)} danger />
                   </div>
                 </div>
@@ -167,7 +217,7 @@ export default function AutoTasksPage(): JSX.Element {
           <h3 className="text-sm font-medium text-gray-900 mb-3">推荐模板</h3>
           <div className="grid grid-cols-2 gap-3">
             {TASK_TEMPLATES.map((tpl, idx) => (
-              <div key={idx} className="bg-white rounded-card border border-gray-100 p-4 shadow-sm">
+              <div key={idx} className="bg-white rounded-card border border-line-light p-4 shadow-card">
                 <h4 className="text-sm font-medium text-gray-900">{tpl.name}</h4>
                 <p className="text-xs text-gray-600 mt-1">{tpl.description}</p>
                 <div className="flex items-center justify-between mt-3">

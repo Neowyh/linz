@@ -21,7 +21,8 @@ export function registerCustomAgentsIPC(_mainWindow: BrowserWindow): void {
   ipcMain.handle('agent:createCustom', async (_event, params: {
     name: string; description?: string; color: string; icon: string;
     systemPrompt: string; tools: string[]; keywords: string[];
-    subtaskPrefix?: string; modelName?: string; engine?: 'deepseek' | 'pi'
+    subtaskPrefix?: string; modelName?: string; engine?: 'deepseek' | 'pi';
+    kbTags?: string[]
   }) => {
     try {
       const row = createCustomAgent(params)

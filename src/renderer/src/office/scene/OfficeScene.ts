@@ -31,6 +31,7 @@ export type OfficeAgentClick = {
 
 export class OfficeScene {
   private app: Application | null = null
+  private destroyed = false
   private world: Container | null = null
   private agentEntities = new Map<string, AgentEntity>()
   private deskEntities = new Map<string, DeskEntity>()
@@ -67,6 +68,13 @@ export class OfficeScene {
       autoDensity: true,
     })
 
+    // init 期间场景可能已被 destroy（entries 变化重建 / StrictMode 双挂载），
+    // 此时必须自行销毁 app，避免孤儿 canvas 残留形成双场景
+    if (this.destroyed) {
+      app.destroy(true, { children: true })
+      return
+    }
+
     this.app = app
     container.appendChild(app.canvas)
 
@@ -75,7 +83,9 @@ export class OfficeScene {
     this.fitStage(width, height)
 
     await loadSpineAssets()
+    if (this.destroyed) return
     const officeOk = await loadOfficeAssets()
+    if (this.destroyed) return
     if (!officeOk) {
       console.error(
         '[Office] desk.png / chair.png 加载失败，工位将使用矢量占位图。请检查 public/assets/office/ 并硬刷新。',
@@ -285,6 +295,7 @@ export class OfficeScene {
   }
 
   destroy() {
+    this.destroyed = true
     this.teardownInteraction()
     bindOfficeScene(null)
     this.app?.ticker.remove(this.onTick)

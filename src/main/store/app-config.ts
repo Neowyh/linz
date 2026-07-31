@@ -42,6 +42,8 @@ interface AppConfigSchema {
     list: Workspace[]
   }
   fileWorkspacePath: string  // agent 文件读写工具的合法根目录，空字符串表示未设置
+  skillScriptEnabled: boolean  // 允许 Agent 执行技能包附带脚本（run_skill_script 工具总开关，默认关）
+  trustedSkillPackages: string[]  // 用户已信任的技能 ID 列表（信任后脚本直接执行，不再弹窗）
 }
 
 let appConfig: Store<AppConfigSchema>
@@ -69,7 +71,9 @@ const defaults: AppConfigSchema = {
     current: '',
     list: []
   },
-  fileWorkspacePath: ''
+  fileWorkspacePath: '',
+  skillScriptEnabled: false,
+  trustedSkillPackages: []
 }
 
 export function getAppConfig(): Store<AppConfigSchema> {

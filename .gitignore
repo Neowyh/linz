@@ -4,3 +4,5 @@ dist/
 .env
 *.log
 *.tsbuildinfo
+.tmp-webview-test/
+.wopentest/

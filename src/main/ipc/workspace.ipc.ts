@@ -5,9 +5,13 @@ import {
   createWorkspace,
   deleteWorkspace,
   renameWorkspace,
-  switchWorkspace
+  switchWorkspace,
+  getWorkspaceKbPath,
+  getWorkspaceTablesPath
 } from '../workspace'
 import { switchDatabase } from '../database'
+import { switchKbDatabase } from '../database/kb'
+import { switchTablesDatabase } from '../database/tables'
 import { agentRegistry } from '../agents/agent-registry'
 import { registerCustomAgentsFromDB } from '../agents/custom-agents.service'
 import { mcpManager } from '../mcp/manager'
@@ -33,6 +37,18 @@ export function registerWorkspaceIPC(mainWindow: BrowserWindow): void {
     }
     const newDbPath = switchWorkspace(id)
     await switchDatabase(newDbPath)
+    // 切换知识库磁盘库（与 data.db 同目录的 kb.db）
+    try {
+      switchKbDatabase(getWorkspaceKbPath())
+    } catch (err) {
+      console.error('[Workspace] KB database switch failed:', err)
+    }
+    // 切换表格数据库（与 data.db 同目录的 tables.db）
+    try {
+      switchTablesDatabase(getWorkspaceTablesPath())
+    } catch (err) {
+      console.error('[Workspace] Tables database switch failed:', err)
+    }
     // 重新注册自定义 Agent（清除旧工作区的，加载新工作区的）
     agentRegistry.clearCustomAgents()
     registerCustomAgentsFromDB()

@@ -105,11 +105,11 @@ export default function WorkspaceSwitcher(): JSX.Element {
       {/* Current workspace button */}
       <button
         onClick={() => setOpen(!open)}
-        className="w-full py-2 px-4 rounded-btn text-sm flex items-center gap-2 text-gray-300 hover:bg-sidebar-hover hover:text-white transition-colors"
+        className="w-full py-2 px-4 rounded-btn text-sm flex items-center gap-2 text-gray-600 border border-line-light bg-gray-50 hover:bg-gray-100 hover:text-gray-900 transition-colors"
       >
-        <FolderOutlined />
+        <FolderOutlined className="text-gray-400" />
         <span className="truncate flex-1 text-left">{current?.name || '默认项目'}</span>
-        <SwapOutlined className="text-[10px] text-gray-500" />
+        <SwapOutlined className="text-[10px] text-gray-400" />
       </button>
 
       {/* Dropdown */}
@@ -119,17 +119,16 @@ export default function WorkspaceSwitcher(): JSX.Element {
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
 
           <div
-            className="absolute left-3 top-full mt-1 w-[220px] border border-white/10 rounded-lg shadow-xl z-[1000] py-1"
-            style={{ backgroundColor: '#2D2D50' }}
+            className="absolute left-3 top-full mt-1 w-[220px] bg-white border border-line rounded-lg shadow-popover z-[1000] py-1"
           >
             {/* Workspace list */}
             {workspaces.map((ws) => (
               <div
                 key={ws.id}
-                className={`flex items-center gap-1 px-3 py-2 cursor-pointer text-sm transition-colors ${
+                className={`group flex items-center gap-1 px-3 py-2 cursor-pointer text-sm transition-colors ${
                   ws.id === current?.id
-                    ? 'bg-primary/20 text-white'
-                    : 'text-gray-300 hover:bg-white/5 hover:text-white'
+                    ? 'bg-primary-light text-primary font-medium'
+                    : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
                 }`}
                 onClick={() => handleSwitch(ws.id)}
               >
@@ -145,13 +144,13 @@ export default function WorkspaceSwitcher(): JSX.Element {
                     />
                     <button
                       onClick={() => handleRename(ws.id)}
-                      className="text-green-400 hover:text-green-300"
+                      className="text-green-500 hover:text-green-600"
                     >
                       <CheckOutlined style={{ fontSize: 12 }} />
                     </button>
                     <button
                       onClick={() => setEditingId(null)}
-                      className="text-gray-400 hover:text-white"
+                      className="text-gray-400 hover:text-gray-600"
                     >
                       <CloseOutlined style={{ fontSize: 12 }} />
                     </button>
@@ -166,7 +165,7 @@ export default function WorkspaceSwitcher(): JSX.Element {
                           setEditingId(ws.id)
                           setEditName(ws.name)
                         }}
-                        className="p-0.5 text-gray-500 hover:text-white"
+                        className="p-0.5 text-gray-400 hover:text-primary"
                       >
                         <EditOutlined style={{ fontSize: 10 }} />
                       </button>
@@ -177,7 +176,7 @@ export default function WorkspaceSwitcher(): JSX.Element {
                           okText="删除"
                           cancelText="取消"
                         >
-                          <button className="p-0.5 text-gray-500 hover:text-red-400">
+                          <button className="p-0.5 text-gray-400 hover:text-red-500">
                             <DeleteOutlined style={{ fontSize: 10 }} />
                           </button>
                         </Popconfirm>
@@ -189,7 +188,7 @@ export default function WorkspaceSwitcher(): JSX.Element {
             ))}
 
             {/* Divider */}
-            <div className="border-t border-white/10 my-1" />
+            <div className="border-t border-line-light my-1" />
 
             {/* Create new workspace */}
             {creating ? (
@@ -205,7 +204,7 @@ export default function WorkspaceSwitcher(): JSX.Element {
                 />
                 <button
                   onClick={handleCreate}
-                  className="text-green-400 hover:text-green-300"
+                  className="text-green-500 hover:text-green-600"
                 >
                   <CheckOutlined style={{ fontSize: 12 }} />
                 </button>
@@ -214,7 +213,7 @@ export default function WorkspaceSwitcher(): JSX.Element {
                     setCreating(false)
                     setNewName('')
                   }}
-                  className="text-gray-400 hover:text-white"
+                  className="text-gray-400 hover:text-gray-600"
                 >
                   <CloseOutlined style={{ fontSize: 12 }} />
                 </button>
@@ -222,7 +221,7 @@ export default function WorkspaceSwitcher(): JSX.Element {
             ) : (
               <button
                 onClick={() => setCreating(true)}
-                className="w-full px-3 py-2 text-sm text-gray-400 hover:text-white hover:bg-white/5 flex items-center gap-2 transition-colors"
+                className="w-full px-3 py-2 text-sm text-gray-500 hover:text-primary hover:bg-gray-100 flex items-center gap-2 transition-colors"
               >
                 <PlusOutlined />
                 新建工作区

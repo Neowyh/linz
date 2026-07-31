@@ -41,17 +41,32 @@ export default function SettingsModal(): JSX.Element {
   const [ollamaChecking, setOllamaChecking] = useState(false)
   const [ollamaAvailable, setOllamaAvailable] = useState<boolean | null>(null)
 
+  // 技能脚本执行开关（立即生效，不随"保存"按钮）
+  const [skillScriptEnabled, setSkillScriptEnabled] = useState(false)
+
+  const handleSkillScriptToggle = async (enabled: boolean): Promise<void> => {
+    setSkillScriptEnabled(enabled)
+    await window.aeromind.settings.set('skillScriptEnabled', enabled)
+    if (enabled) {
+      message.success('已允许执行技能脚本；每个技能首次执行时会弹窗请求确认')
+    } else {
+      message.info('已禁止执行技能脚本')
+    }
+  }
+
   // 同步 store 状态到本地
   useEffect(() => {
     const loadValues = async (): Promise<void> => {
-      const [savedBaseURL, savedModel, savedFallback, budgetData] = await Promise.all([
+      const [savedBaseURL, savedModel, savedFallback, budgetData, savedSkillScript] = await Promise.all([
         window.aeromind.settings.get('baseURL'),
         window.aeromind.settings.get('modelName'),
         window.aeromind.settings.get('fallbackModel'),
-        window.aeromind.token.getBudget()
+        window.aeromind.token.getBudget(),
+        window.aeromind.settings.get('skillScriptEnabled')
       ])
       setBaseURL(savedBaseURL || PROVIDER_PRESETS[provider]?.baseURL || '')
       setModelName(savedModel || PROVIDER_PRESETS[provider]?.modelName || '')
+      setSkillScriptEnabled(Boolean(savedSkillScript))
       if (budgetData) {
         setBudgetEnabled(budgetData.enabled)
         setMonthlyLimit(budgetData.monthlyLimit)
@@ -342,6 +357,23 @@ export default function SettingsModal(): JSX.Element {
                 </div>
               </>
             )}
+          </div>
+        </div>
+
+        <div>
+          <h3 className="text-sm font-medium text-gray-900 mb-3">高级</h3>
+          <div className="flex items-center justify-between">
+            <div className="pr-4">
+              <label className="text-xs text-gray-600">允许执行技能脚本</label>
+              <p className="text-[11px] text-gray-400 mt-0.5">
+                开启后 Agent 可执行导入技能包中 scripts/ 目录的脚本（.py/.js/.bat 等）。每个技能首次执行时会弹窗显示完整命令并请求确认，信任后不再询问。
+              </p>
+            </div>
+            <Switch
+              checked={skillScriptEnabled}
+              onChange={handleSkillScriptToggle}
+              size="small"
+            />
           </div>
         </div>
 

@@ -1,8 +1,10 @@
 import { getDatabase, debounceSave, type AgentSkill } from '../database'
 import { v4 as uuidv4 } from 'uuid'
+import fs from 'fs'
+import path from 'path'
 
 // 显式列名，避免 ALTER TABLE 列顺序问题
-const SKILL_COLUMNS = 'id, name, description, content, target_agents, trigger_keywords, priority, enabled, is_builtin, is_custom, created_at, updated_at'
+const SKILL_COLUMNS = 'id, name, description, content, target_agents, trigger_keywords, priority, enabled, is_builtin, is_custom, created_at, updated_at, package_path'
 
 function rowToAgentSkill(row: any[]): AgentSkill {
   return {
@@ -17,7 +19,8 @@ function rowToAgentSkill(row: any[]): AgentSkill {
     is_builtin: row[8],
     is_custom: row[9],
     created_at: row[10],
-    updated_at: row[11]
+    updated_at: row[11],
+    package_path: row[12] ?? null
   }
 }
 
@@ -70,12 +73,40 @@ export function getEffectiveSkillsForAgent(agentType: string, task: string): Age
   return matched.slice(0, 10)
 }
 
+// 列出技能包 scripts/ 下的脚本文件（相对路径，如 scripts/run.py）
+export function listSkillScripts(packagePath: string): string[] {
+  try {
+    const scriptDir = path.join(packagePath, 'scripts')
+    if (!fs.statSync(scriptDir).isDirectory()) return []
+    const out: string[] = []
+    const walk = (dir: string, prefix: string): void => {
+      for (const f of fs.readdirSync(dir).sort()) {
+        const full = path.join(dir, f)
+        if (fs.statSync(full).isDirectory()) walk(full, `${prefix}${f}/`)
+        else if (!f.startsWith('.')) out.push(`${prefix}${f}`)
+      }
+    }
+    walk(scriptDir, 'scripts/')
+    return out
+  } catch {
+    return []
+  }
+}
+
 // 把技能列表格式化为系统提示词片段
 export function formatSkillsForPrompt(skills: AgentSkill[]): string {
   if (skills.length === 0) return ''
   const blocks = skills.map((s) => {
     const desc = s.description ? `${s.description}\n\n` : ''
-    return `### ${s.name}\n${desc}${s.content}`
+    let block = `### ${s.name}\n${desc}${s.content}`
+    // 技能包含可执行脚本时，告知 Agent 脚本位置与执行工具
+    if (s.package_path) {
+      const scripts = listSkillScripts(s.package_path)
+      if (scripts.length > 0) {
+        block += `\n\n> 本技能附带脚本（位于 ${s.package_path}），需要执行时使用 run_skill_script 工具：\n${scripts.map((f) => `> - ${f}`).join('\n')}`
+      }
+    }
+    return block
   })
   return `## 可用技能\n\n以下技能与本任务相关，请在回答时参考其中的步骤和规范：\n\n${blocks.join('\n\n---\n\n')}`
 }
@@ -96,6 +127,46 @@ export function getSkill(id: string): AgentSkill | null {
   return rowToAgentSkill(results[0].values[0])
 }
 
+// 按 ID 批量取启用中的技能（对话中 "/" 主动注入用；禁用技能不可注入）
+export function getSkillsByIds(ids: string[]): AgentSkill[] {
+  if (!ids || ids.length === 0) return []
+  const db = getDatabase()
+  const placeholders = ids.map(() => '?').join(', ')
+  const results = db.exec(
+    `SELECT ${SKILL_COLUMNS} FROM agent_skills WHERE enabled = 1 AND id IN (${placeholders})`,
+    ids
+  )
+  if (!results[0]) return []
+  return results[0].values.map(rowToAgentSkill)
+}
+
+function isSkillNameTaken(name: string, excludeId?: string): boolean {
+  const db = getDatabase()
+  const results = excludeId
+    ? db.exec('SELECT id FROM agent_skills WHERE LOWER(TRIM(name)) = LOWER(?) AND id != ?', [name.trim(), excludeId])
+    : db.exec('SELECT id FROM agent_skills WHERE LOWER(TRIM(name)) = LOWER(?)', [name.trim()])
+  return Boolean(results[0] && results[0].values.length > 0)
+}
+
+// 按 ID 或名称（大小写不敏感）查找启用中的技能，run_skill_script 工具用
+export function findSkillByNameOrId(nameOrId: string): AgentSkill | null {
+  const db = getDatabase()
+  const results = db.exec(
+    `SELECT ${SKILL_COLUMNS} FROM agent_skills WHERE enabled = 1 AND (id = ? OR LOWER(TRIM(name)) = LOWER(?))`,
+    [nameOrId, nameOrId.trim()]
+  )
+  if (!results[0] || !results[0].values[0]) return null
+  return rowToAgentSkill(results[0].values[0])
+}
+
+// 写入技能包落盘目录（导入时复制/解压完成后调用）
+export function setSkillPackagePath(id: string, packagePath: string): void {
+  const db = getDatabase()
+  db.run('UPDATE agent_skills SET package_path = ?, updated_at = ? WHERE id = ?', [packagePath, new Date().toISOString(), id])
+  debounceSave()
+  refreshSkillCache()
+}
+
 export interface CreateSkillParams {
   name: string
   description?: string
@@ -108,6 +179,9 @@ export interface CreateSkillParams {
 
 export function createSkill(params: CreateSkillParams): AgentSkill {
   const db = getDatabase()
+  if (isSkillNameTaken(params.name)) {
+    throw new Error(`已存在同名技能「${params.name.trim()}」，请换个名称`)
+  }
   const id = `agent-skill-custom-${uuidv4()}`
   const now = new Date().toISOString()
   db.run(
@@ -146,6 +220,9 @@ export function updateSkill(id: string, updates: UpdateSkillParams): { success: 
   const existing = getSkill(id)
   if (!existing) return { success: false, error: '技能不存在' }
   if (existing.is_builtin === 1) return { success: false, error: '内置技能不可修改' }
+  if (updates.name !== undefined && isSkillNameTaken(updates.name, id)) {
+    return { success: false, error: `已存在同名技能「${updates.name.trim()}」，请换个名称` }
+  }
 
   const setClauses: string[] = []
   const values: any[] = []
@@ -178,6 +255,14 @@ export function deleteSkill(id: string): { success: boolean; error?: string } {
   db.run('DELETE FROM agent_skills WHERE id = ?', [id])
   debounceSave()
   refreshSkillCache()
+  // 清理导入时落盘的技能包目录（scripts 等）
+  if (existing.package_path) {
+    try {
+      fs.rmSync(existing.package_path, { recursive: true, force: true })
+    } catch (err) {
+      console.warn(`[AgentSkills] 清理技能包目录失败（${existing.package_path}）:`, err)
+    }
+  }
   return { success: true }
 }
 

@@ -1,5 +1,12 @@
 import { Container, Graphics, Text } from 'pixi.js'
 
+/**
+ * 场景整体会被 fitStage 缩放（baseScale<1）且支持滚轮放大到 4×，
+ * 文字按默认 resolution(=devicePixelRatio，Win7 上通常为 1) 栅格化后被缩放会发虚。
+ * 用更高的 resolution 栅格化文字纹理，缩放后保持清晰。
+ */
+const TEXT_RESOLUTION = 3
+
 const NAME_STYLE = {
   fontFamily: 'system-ui, -apple-system, sans-serif',
   fontSize: 11,
@@ -36,12 +43,12 @@ export class StatusLabel extends Container {
 
   constructor(name: string) {
     super()
-    this.nameText = new Text({ text: name, style: NAME_STYLE })
+    this.nameText = new Text({ text: name, style: NAME_STYLE, resolution: TEXT_RESOLUTION })
     this.nameText.anchor.set(0.5, 1)
     this.nameText.position.set(0, 0)
 
     this.taskBg = new Graphics()
-    this.taskText = new Text({ text: '', style: TASK_STYLE })
+    this.taskText = new Text({ text: '', style: TASK_STYLE, resolution: TEXT_RESOLUTION })
     this.taskText.anchor.set(0.5, 0)
 
     this.stateDot = new Graphics()

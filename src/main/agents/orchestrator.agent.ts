@@ -7,7 +7,7 @@ import { agentMessageBus } from './agent-message-bus'
 import { ORCHESTRATOR_SYSTEM_PROMPT } from './prompts/orchestrator.system'
 import { searchKnowledgeBase, formatRagContext, hybridSearch } from '../ipc/knowledge.ipc'
 import { getCustomKeywords, getCustomSubtaskPrefix, getBuiltinAgentKeywords, getBuiltinSubtaskPrefix } from './custom-agents.service'
-import { getEffectiveSkillsForAgent, formatSkillsForPrompt } from './agent-skills.service'
+import { getEffectiveSkillsForAgent, formatSkillsForPrompt, getSkillsByIds } from './agent-skills.service'
 import type { IAgent, AgentConfig, AgentState, StreamChunk, AgentContext, AgentStatusData, AgentType, AgentMessage, AgentOverrideConfig } from './base.agent'
 import { buildChatHistory } from './base.agent'
 import { HumanMessage, AIMessage } from '@langchain/core/messages'
@@ -296,7 +296,10 @@ export class OrchestratorAgent implements IAgent {
         .join('\n')
       const dynamicSystemPrompt = (() => {
         const base = `${this.systemPrompt}\n\n## 当前可调度的专业 Agent\n${availableAgents || '- （暂无可用 Agent）'}`
-        const skills = getEffectiveSkillsForAgent('orchestrator', task)
+        const forced = context.forcedSkillIds?.length ? getSkillsByIds(context.forcedSkillIds) : []
+        const matched = getEffectiveSkillsForAgent('orchestrator', task)
+        const forcedIds = new Set(forced.map((s) => s.id))
+        const skills = [...forced, ...matched.filter((s) => !forcedIds.has(s.id))]
         return skills.length > 0 ? `${base}\n\n${formatSkillsForPrompt(skills)}` : base
       })()
       // RAG: 检索知识库相关片段（优先使用混合检索）

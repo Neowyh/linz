@@ -88,11 +88,14 @@ export default function AgentEditorPage(): JSX.Element {
   const [subtaskPrefix, setSubtaskPrefix] = useState('')
   const [modelName, setModelName] = useState('deepseek-chat')
   const [engine, setEngine] = useState<'deepseek' | 'pi'>('deepseek')
+  const [kbTags, setKbTags] = useState<string[]>([])
+  const [availableKbTags, setAvailableKbTags] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
     fetchAvailableTools()
+    window.aeromind.kb.tags().then(setAvailableKbTags).catch(() => {})
     if (isBuiltin) {
       fetchBuiltinAgents()
     }
@@ -152,6 +155,7 @@ export default function AgentEditorPage(): JSX.Element {
     setSubtaskPrefix(agent.subtask_prefix || '')
     setModelName(agent.model_name || 'deepseek-chat')
     setEngine(agent.engine === 'pi' ? 'pi' : 'deepseek')
+    try { setKbTags(JSON.parse(agent.kb_tags || '[]')) } catch { setKbTags([]) }
     setLoading(false)
   }
 
@@ -210,7 +214,8 @@ export default function AgentEditorPage(): JSX.Element {
         delegates_to: JSON.stringify(delegatesTo),
         subtask_prefix: subtaskPrefix.trim() || null,
         model_name: modelName.trim() || 'deepseek-chat',
-        engine
+        engine,
+        kb_tags: JSON.stringify(kbTags)
       }
 
       if (isBuiltin && id) {
@@ -233,7 +238,8 @@ export default function AgentEditorPage(): JSX.Element {
           delegates_to: JSON.stringify(delegatesTo),
           subtaskPrefix: subtaskPrefix.trim() || undefined,
           modelName: modelName.trim() || 'deepseek-chat',
-          engine
+          engine,
+          kbTags
         })
         if (result.success) {
           message.success('Agent 已更新')
@@ -253,7 +259,8 @@ export default function AgentEditorPage(): JSX.Element {
           delegates_to: JSON.stringify(delegatesTo),
           subtaskPrefix: subtaskPrefix.trim() || undefined,
           modelName: modelName.trim() || 'deepseek-chat',
-          engine
+          engine,
+          kbTags
         })
         if (result.success) {
           message.success('Agent 已创建')
@@ -472,6 +479,22 @@ export default function AgentEditorPage(): JSX.Element {
               onChange={(e) => setSubtaskPrefix(e.target.value)}
               placeholder="作为XXX工程师，请对以下飞行器设计任务进行XXX分析："
               rows={2}
+            />
+          </div>
+
+          {/* KB Tags */}
+          <div>
+            <label className="text-sm font-medium text-gray-900 mb-1 block">知识库限定标签</label>
+            <Text className="text-xs text-gray-600 block mb-2">
+              配置后，该 Agent 的 knowledge_search 工具只检索带这些标签的知识库文档；留空则检索全库。需先在知识库导入文档时打上对应标签。
+            </Text>
+            <Select
+              mode="tags"
+              value={kbTags}
+              onChange={setKbTags}
+              placeholder="如：安保（留空 = 检索全库）"
+              className="w-full"
+              options={availableKbTags.map((t) => ({ label: t, value: t }))}
             />
           </div>
 

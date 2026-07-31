@@ -24,6 +24,19 @@ export interface StreamErrorData {
   error: string
 }
 
+// 技能导入候选（与 main/agents/skill-import.service.ts 的 SkillCandidate 对应）
+export interface SkillImportCandidateData {
+  sourcePath: string
+  name: string
+  description: string
+  content: string
+  suggestedKeywords: string[]
+  warnings: string[]
+  duplicate: boolean
+  packageSource?: { kind: 'dir'; dir: string } | { kind: 'zip'; zipPath: string; prefix: string }
+  scriptNames: string[]
+}
+
 export interface ConversationSummary {
   id: string
   title: string | null
@@ -60,6 +73,7 @@ export interface KbDocument {
   file_name: string
   file_type: string
   domain_category: string
+  tags: string[]
   index_status: string
   chunk_count: number
   file_size: number
@@ -71,6 +85,76 @@ export interface KbStats {
   totalDocuments: number
   totalChunks: number
   categories: Array<{ category: string; count: number }>
+  dbSizeBytes?: number
+}
+
+export interface KbImportProgress {
+  total: number
+  done: number
+  current?: string
+  fileName: string
+  status: 'parsing' | 'indexing' | 'done' | 'skipped' | 'error'
+  error?: string
+  chunkCount?: number
+}
+
+export interface KbImportFileResult {
+  fileName: string
+  status: 'done' | 'skipped' | 'error'
+  error?: string
+  chunkCount?: number
+  docId?: string
+}
+
+export interface TableColumnMeta {
+  name: string
+  type: 'INTEGER' | 'REAL' | 'TEXT'
+}
+
+export interface TableMeta {
+  id: string
+  dataset_id: string
+  table_name: string
+  sheet_name: string | null
+  columns: TableColumnMeta[]
+  row_count: number
+}
+
+export interface TableDataset {
+  id: string
+  name: string
+  source_file: string
+  file_type: string
+  table_count: number
+  total_rows: number
+  created_at: string
+  tables: TableMeta[]
+}
+
+export interface TableImportResult {
+  fileName: string
+  status: 'done' | 'error'
+  error?: string
+  datasetId?: string
+  datasetName?: string
+  tableCount?: number
+  totalRows?: number
+}
+
+export interface TableQueryPayload {
+  success: boolean
+  error?: string
+  columns: string[]
+  rows: Array<Record<string, unknown>>
+  truncated: boolean
+}
+
+export interface KbImportSummary {
+  total: number
+  done: number
+  skipped: number
+  error: number
+  results: KbImportFileResult[]
 }
 
 export interface TemplateData {
@@ -126,6 +210,8 @@ export interface CustomAgentData {
   usage_count: number
   created_at: string
   updated_at: string
+  engine: 'deepseek' | 'pi'
+  kb_tags: string        // JSON array：知识库限定标签
 }
 
 export interface ToolInfo {
@@ -146,11 +232,12 @@ export interface AgentSkillData {
   is_custom: boolean
   created_at: string
   updated_at: string
+  package_path?: string | null
 }
 
 export interface AeromindAPI {
   chat: {
-    sendMessage(conversationId: string, content: string, selectedAgent?: string, dispatchMode?: 'single' | 'collaborative'): void
+    sendMessage(conversationId: string, content: string, selectedAgent?: string, dispatchMode?: 'single' | 'collaborative', skillIds?: string[]): void
     onStreamChunk(callback: (data: StreamChunkData) => void): () => void
     onStreamEnd(callback: (data: StreamEndData) => void): () => void
     onStreamError(callback: (data: StreamErrorData) => void): () => void
@@ -185,6 +272,11 @@ export interface AeromindAPI {
     update(id: string, updates: Record<string, unknown>): Promise<{ success: boolean; error?: string }>
     delete(id: string): Promise<{ success: boolean; error?: string }>
     toggle(id: string, enabled: boolean): Promise<{ success: boolean; error?: string }>
+    importPick(): Promise<string[]>
+    importPickFolder(): Promise<string[]>
+    importParse(paths: string[]): Promise<{ candidates: SkillImportCandidateData[]; errors: string[] }>
+    importConfirm(items: Array<{ name: string; description?: string; content: string; triggerKeywords?: string[]; packageSource?: { kind: 'dir'; dir: string } | { kind: 'zip'; zipPath: string; prefix: string } }>): Promise<{ success: boolean; imported: number; names: string[]; error?: string }>
+    exportSkill(id: string): Promise<{ success: boolean; filePath?: string; canceled?: boolean; error?: string }>
   }
   conversation: {
     list(): Promise<ConversationSummary[]>
@@ -203,6 +295,7 @@ export interface AeromindAPI {
     update(id: string, updates: any): Promise<{ success: boolean }>
     delete(id: string): Promise<{ success: boolean }>
     toggle(id: string): Promise<{ success: boolean }>
+    test(id: string): Promise<{ success: boolean; message?: string }>
     onNotification(callback: (data: AutoTaskNotification) => void): () => void
   }
   template: {
@@ -216,16 +309,31 @@ export interface AeromindAPI {
   }
   kb: {
     listDocuments(): Promise<KbDocument[]>
-    uploadDocuments(): Promise<KbDocument[]>
-    search(query: string, limit?: number): Promise<Array<{ content: string; document_id: string; file_name: string; score: number }>>
+    uploadDocuments(): Promise<any[]>
+    pickImportPaths(): Promise<string[]>
+    importPaths(paths: string[], tags?: string[], domain?: string): Promise<KbImportSummary>
+    importStatus(): Promise<{ running: boolean }>
+    onImportProgress(callback: (data: KbImportProgress) => void): () => void
+    updateTags(docId: string, tags: string[]): Promise<{ success: boolean }>
+    updateDomain(docId: string, domain: string): Promise<{ success: boolean }>
+    tags(): Promise<string[]>
+    search(query: string, limit?: number, tags?: string[]): Promise<Array<{ content: string; document_id: string; file_name: string; score: number }>>
     deleteDocument(id: string): Promise<{ success: boolean }>
+    deleteDocuments(ids: string[]): Promise<{ success: boolean; deleted: number }>
     stats(): Promise<KbStats>
     categories(): Promise<string[]>
     listByCategory(category: string): Promise<KbDocument[]>
-    ask(question: string): Promise<{ answer: string; sources: Array<{ file_name: string; snippet: string }> }>
-    semanticSearch(query: string, options?: { domain?: string; limit?: number }): Promise<Array<{ content: string; document_id: string; file_name: string; score: number }>>
+    ask(question: string, tags?: string[]): Promise<{ answer: string; sources: Array<{ file_name: string; snippet: string }> }>
+    semanticSearch(query: string, options?: { domain?: string; limit?: number; tags?: string[] }): Promise<Array<{ content: string; document_id: string; file_name: string; score: number }>>
     embeddingStatus(): Promise<boolean>
     generateEmbeddings(): Promise<{ success: boolean; embedded?: number; error?: string }>
+  }
+  tables: {
+    list(): Promise<TableDataset[]>
+    import(): Promise<TableImportResult[]>
+    preview(tableName: string, limit?: number): Promise<TableQueryPayload>
+    remove(datasetId: string): Promise<{ success: boolean; error?: string }>
+    query(sql: string): Promise<TableQueryPayload>
   }
   token: {
     getUsage(): Promise<{ inputTokens: number; outputTokens: number }>

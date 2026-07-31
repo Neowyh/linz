@@ -31,6 +31,7 @@ export interface Message {
   content: string
   tokens: number
   created_at: string
+  tool_calls: string | null  // JSON 序列化的 ToolCallEntry[]
 }
 
 // 保存数据库到磁盘
@@ -103,6 +104,17 @@ export async function initDatabase(customDbPath?: string): Promise<SqlJsDatabase
 
   db.run(`CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, created_at);`)
 
+  // 迁移：messages 表补 tool_calls 列（结构化持久化工具调用，旧版本把工具结果拼进 content）
+  try {
+    const msgCols = db.exec("SELECT name FROM pragma_table_info('messages')")
+    if (msgCols[0] && !msgCols[0].values.some((r) => r[0] === 'tool_calls')) {
+      db.run('ALTER TABLE messages ADD COLUMN tool_calls TEXT')
+      console.log('[Database] messages 表新增 tool_calls 列')
+    }
+  } catch (err) {
+    console.warn('[Database] messages tool_calls migration skipped:', err)
+  }
+
   // 自动任务表
   db.run(`
     CREATE TABLE IF NOT EXISTS auto_tasks (
@@ -163,9 +175,21 @@ export async function initDatabase(customDbPath?: string): Promise<SqlJsDatabase
       is_builtin INTEGER DEFAULT 0,
       is_custom INTEGER DEFAULT 1,
       created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
+      updated_at TEXT DEFAULT (datetime('now')),
+      package_path TEXT
     );
   `)
+
+  // 迁移：agent_skills 表补 package_path 列（导入技能包落盘目录，供脚本执行工具定位）
+  try {
+    const skillCols = db.exec("SELECT name FROM pragma_table_info('agent_skills')")
+    if (skillCols[0] && !skillCols[0].values.some((r) => r[0] === 'package_path')) {
+      db.run('ALTER TABLE agent_skills ADD COLUMN package_path TEXT')
+      console.log('[Database] agent_skills 表新增 package_path 列')
+    }
+  } catch (err) {
+    console.warn('[Database] agent_skills package_path migration skipped:', err)
+  }
 
   // 知识库文档表
   db.run(`
@@ -265,6 +289,18 @@ export async function initDatabase(customDbPath?: string): Promise<SqlJsDatabase
     }
   } catch (err) {
     console.warn('[DB] Migration: engine column may already exist:', err)
+  }
+
+  // Migration: add kb_tags column to custom_agents（知识库限定标签，JSON 数组）
+  try {
+    const kbTagsCol = db.exec("PRAGMA table_info(custom_agents)")
+    const hasKbTags = kbTagsCol[0]?.values?.some((col: any) => col[1] === 'kb_tags')
+    if (!hasKbTags) {
+      db.run('ALTER TABLE custom_agents ADD COLUMN kb_tags TEXT DEFAULT \'[]\'')
+      console.log('[DB] Added kb_tags column to custom_agents')
+    }
+  } catch (err) {
+    console.warn('[DB] Migration: kb_tags column may already exist:', err)
   }
 
   // MCP 服务器表（每个工作区独立一份）
@@ -779,4 +815,5 @@ export interface AgentSkill {
   is_custom: number
   created_at: string
   updated_at: string
+  package_path: string | null  // 导入的技能包落盘目录（含 scripts/references），手动创建的技能为 null
 }

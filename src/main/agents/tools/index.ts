@@ -1,17 +1,21 @@
 import type { Tool } from '@langchain/core/tools'
 import type { AgentType, AgentContext, StreamChunk } from '../base.agent'
+import { getDatabase } from '../../database'
 import { calculatorTool } from './calculator.tool'
 import { aeroCalculatorTool } from './aero-calculator.tool'
-import { knowledgeSearchTool } from './knowledge-search.tool'
+import { knowledgeSearchTool, createKnowledgeSearchTool } from './knowledge-search.tool'
+import { dbTablesTool, dbQueryTool } from './db-query.tool'
 import { xfoilTool } from './xfoil.tool'
+import { runSkillScriptTool } from './run-skill-script.tool'
 import { createDelegateTool } from './delegate.tool'
 import { createFilesystemTools } from './filesystem.tool'
 import { toolRegistry, type ToolInfo } from './registry'
 
-const AERO_TOOLS: Tool[] = [aeroCalculatorTool, calculatorTool, knowledgeSearchTool, xfoilTool]
-const SIM_TOOLS: Tool[] = [calculatorTool, knowledgeSearchTool, xfoilTool]
-const CALC_TOOLS: Tool[] = [calculatorTool, knowledgeSearchTool]
-const KB_TOOLS: Tool[] = [knowledgeSearchTool]
+const DB_TOOLS: Tool[] = [dbTablesTool, dbQueryTool]
+const AERO_TOOLS: Tool[] = [aeroCalculatorTool, calculatorTool, knowledgeSearchTool, xfoilTool, runSkillScriptTool, ...DB_TOOLS]
+const SIM_TOOLS: Tool[] = [calculatorTool, knowledgeSearchTool, xfoilTool, runSkillScriptTool, ...DB_TOOLS]
+const CALC_TOOLS: Tool[] = [calculatorTool, knowledgeSearchTool, runSkillScriptTool, ...DB_TOOLS]
+const KB_TOOLS: Tool[] = [knowledgeSearchTool, runSkillScriptTool, ...DB_TOOLS]
 
 const BUILTIN_TOOL_MAP: Record<string, Tool[]> = {
   orchestrator: [],
@@ -30,7 +34,10 @@ const BUILTIN_TOOL_INFOS: Array<{ name: string; description: string; tool: Tool 
   { name: 'calculator', description: '通用数学计算器', tool: calculatorTool },
   { name: 'aero_calculator', description: '气动力公式计算（升力/阻力/雷诺数等）', tool: aeroCalculatorTool },
   { name: 'knowledge_search', description: '知识库检索', tool: knowledgeSearchTool },
-  { name: 'xfoil', description: 'XFOIL 翼型分析', tool: xfoilTool }
+  { name: 'db_tables', description: '列出表格数据库中的数据表结构', tool: dbTablesTool },
+  { name: 'db_query', description: '对表格数据库执行只读 SQL 查询', tool: dbQueryTool },
+  { name: 'xfoil', description: 'XFOIL 翼型分析', tool: xfoilTool },
+  { name: 'run_skill_script', description: '执行技能包附带脚本（.py/.js/.bat 等）', tool: runSkillScriptTool }
 ]
 
 // 启动时把内置工具注册到 ToolRegistry（一次性，幂等）
@@ -48,7 +55,10 @@ export const AVAILABLE_TOOL_NAMES = [
   { name: 'calculator', description: '通用数学计算器' },
   { name: 'aero_calculator', description: '气动力公式计算（升力/阻力/雷诺数等）' },
   { name: 'knowledge_search', description: '知识库检索' },
+  { name: 'db_tables', description: '列出表格数据库中的数据表结构' },
+  { name: 'db_query', description: '对表格数据库执行只读 SQL 查询' },
   { name: 'xfoil', description: 'XFOIL 翼型分析' },
+  { name: 'run_skill_script', description: '执行技能包附带脚本（.py/.js/.bat 等）' },
   { name: 'delegate_to_agent', description: '委派子任务给其他专业 Agent' }
 ]
 
@@ -94,6 +104,21 @@ export function resolveToolsByNames(names: string[]): Tool[] {
     .filter((t): t is Tool => t !== undefined)
 }
 
+// 读取 agent 的知识库限定标签（custom_agents.kb_tags，内置/自定义 agent 通用）
+// 每次构建工具时直查 DB：单次 agent 运行只调用一次，开销可忽略，且天然跟随编辑生效
+function getAgentKbTags(agentType: string): string[] {
+  try {
+    const db = getDatabase()
+    const results = db.exec('SELECT kb_tags FROM custom_agents WHERE id = ?', [agentType])
+    const raw = results[0]?.values[0]?.[0] as string | undefined
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter((t): t is string => typeof t === 'string' && t.trim().length > 0) : []
+  } catch {
+    return []
+  }
+}
+
 export function getToolsForAgent(
   agentType: string,
   customToolNames?: string[],
@@ -111,6 +136,12 @@ export function getToolsForAgent(
     tools = [...builtin]
   } else {
     tools = []
+  }
+
+  // 若 agent 配置了知识库限定标签，替换 knowledge_search 为带标签过滤的实例
+  const kbTags = getAgentKbTags(agentType)
+  if (kbTags.length > 0) {
+    tools = tools.map((t) => (t.name === 'knowledge_search' ? (createKnowledgeSearchTool(kbTags) as unknown as Tool) : t))
   }
 
   // Add delegate tool if this agent has delegation targets AND we're in collaborative mode.
