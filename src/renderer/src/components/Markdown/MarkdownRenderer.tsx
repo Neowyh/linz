@@ -1,8 +1,9 @@
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import rehypeHighlight from 'rehype-highlight'
+import { Image } from 'antd'
 import 'katex/dist/katex.min.css'
 import 'highlight.js/styles/github-dark.css'
 
@@ -20,11 +21,18 @@ function normalizeMath(src: string): string {
     .replace(/`(\$\$?[^`]+?\$\$?)`/g, '$1')
 }
 
+// react-markdown 默认只放行 http/https 等协议，data: 图片会被过滤成空 src。
+// 仅放行 data:image/ 协议（工具生成的图表），其余保持默认安全策略。
+function safeUrlTransform(url: string): string {
+  return url.startsWith('data:image/') ? url : defaultUrlTransform(url)
+}
+
 export default function MarkdownRenderer({ content }: MarkdownRendererProps): JSX.Element {
   if (!content) return <></>
 
   return (
     <ReactMarkdown
+      urlTransform={safeUrlTransform}
       remarkPlugins={[remarkGfm, remarkMath]}
       rehypePlugins={[rehypeKatex, [rehypeHighlight, { detect: true, ignoreMissing: true }]]}
       components={{
@@ -74,7 +82,15 @@ export default function MarkdownRenderer({ content }: MarkdownRendererProps): JS
           </blockquote>
         ),
         hr: () => <hr className="my-4 border-gray-200" />,
-        strong: ({ children }) => <strong className="font-bold text-gray-900">{children}</strong>
+        strong: ({ children }) => <strong className="font-bold text-gray-900">{children}</strong>,
+        img: ({ src, alt }) => (
+          <Image
+            src={src}
+            alt={alt}
+            className="my-2 rounded-lg border border-gray-100"
+            style={{ maxWidth: '100%' }}
+          />
+        )
       }}
     >
       {normalizeMath(content)}

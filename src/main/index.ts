@@ -12,6 +12,7 @@ import { registerAllIPC } from './ipc'
 import { registerAllAgents } from './agents'
 import { startAllSchedulers, stopAllSchedulers, setMainWindowForScheduler } from './scheduler'
 import { createTray, destroyTray } from './tray'
+import { setupAppMenu } from './menu'
 import { initDefaultWorkspace, getWorkspaceDbPath, getWorkspaceKbPath, getWorkspaceTablesPath } from './workspace'
 import { mcpManager } from './mcp/manager'
 import { disposeAll as disposePiSessions } from './pi/session-manager'
@@ -30,7 +31,8 @@ app.disableHardwareAcceleration()
 
 // 侧边栏浏览器 webview 里 target="_blank" / window.open 的跳转：
 // Electron 22 已移除 webContents/webview 的 new-window 事件，必须用 setWindowOpenHandler，
-// 否则点击这类链接毫无反应。让目标地址在 webview 自身内打开（仅 http/https），不弹新窗口。
+// 否则点击这类链接毫无反应。目标地址不在此处加载，而是转发给宿主渲染进程，
+// 由 BrowserPanel 为它新建一个标签页（仅 http/https）；宿主不可用时兜底在当前 webview 内打开。
 app.on('web-contents-created', (_event, contents) => {
   console.log('[Browser] web-contents-created type=', contents.getType(), 'id=', contents.id)
   if (contents.getType() !== 'webview') return
@@ -39,7 +41,12 @@ app.on('web-contents-created', (_event, contents) => {
     contents.setWindowOpenHandler(({ url }) => {
       console.log('[Browser] windowOpenHandler:', url)
       if (/^https?:\/\//i.test(url)) {
-        contents.loadURL(url).catch(() => {})
+        const host = contents.hostWebContents
+        if (host && !host.isDestroyed()) {
+          host.send('browser:openInNewTab', { url, guestId: contents.id })
+        } else {
+          contents.loadURL(url).catch(() => {})
+        }
       }
       return { action: 'deny' }
     })
@@ -97,6 +104,9 @@ app.whenReady().then(async () => {
   // 创建主窗口
   mainWindow = createMainWindow()
   setMainWindowForScheduler(mainWindow)
+
+  // 中文应用菜单（文件/编辑/视图/导航/窗口/帮助）
+  setupAppMenu()
 
   // 系统托盘：生产模式下关闭窗口隐藏到托盘，开发模式正常退出
   if (!is.dev) {

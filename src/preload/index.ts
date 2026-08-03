@@ -325,6 +325,17 @@ const api = {
     },
     saveFile: (filePath: string, dataBase64: string): Promise<{ success: boolean; filePath: string }> => {
       return ipcRenderer.invoke('export:saveFile', filePath, dataBase64)
+    },
+    saveDirectory: (): Promise<string | null> => {
+      return ipcRenderer.invoke('export:saveDirectory')
+    },
+    saveMarkdownBundle: (payload: {
+      dirPath: string
+      fileName: string
+      mdContent: string
+      images: Array<{ name: string; base64: string }>
+    }): Promise<{ success: boolean; mdPath: string }> => {
+      return ipcRenderer.invoke('export:saveMarkdownBundle', payload)
     }
   },
 
@@ -418,6 +429,18 @@ const api = {
     }
   },
 
+  browser: {
+    onOpenInNewTab: (callback: (data: { url: string; guestId: number }) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { url: string; guestId: number }): void => {
+        callback(data)
+      }
+      ipcRenderer.on('browser:openInNewTab', handler)
+      return () => {
+        ipcRenderer.removeListener('browser:openInNewTab', handler)
+      }
+    }
+  },
+
   terminal: {
     spawn: (opts: { cwd?: string } = {}): Promise<{ sessionId: string }> => {
       return ipcRenderer.invoke('terminal:spawn', opts)
@@ -447,6 +470,18 @@ const api = {
       ipcRenderer.on('terminal:exit', handler)
       return () => {
         ipcRenderer.removeListener('terminal:exit', handler)
+      }
+    }
+  },
+
+  menu: {
+    onAction: (callback: (data: { action: string; payload?: unknown }) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { action: string; payload?: unknown }): void => {
+        callback(data)
+      }
+      ipcRenderer.on('menu:action', handler)
+      return () => {
+        ipcRenderer.removeListener('menu:action', handler)
       }
     }
   }

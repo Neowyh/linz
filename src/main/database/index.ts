@@ -492,7 +492,7 @@ function getBuiltinAgentSeedData() {
     {
       id: 'aero', name: '气动 Agent', description: '飞行器气动分析与设计', color: '#1E6FCC', icon: 'assets/icons/aero.svg',
       system_prompt: '你是一位资深飞行器气动设计工程师。你擅长：\n- 翼型气动特性分析（Cl, Cd, Cm）\n- 机翼气动设计（展弦比、后掠角、尖削比优化）\n- 升阻比估算与优化\n- 巡航性能分析\n- CFD仿真预处理建议\n- 气动布局评估\n\n方法：基于经典气动手册方法（Anderson, Raymer, Torenbeek）。诚实标注精度，使用标准气动参数和术语，Markdown输出包含表格和LaTeX公式。安全提示：超范围参数警告，标注置信度（高/中/低），强调验证需求，结果仅为初步设计参考。',
-      tools: '["aero_calculator","calculator","knowledge_search","xfoil"]',
+      tools: '["aero_calculator","calculator","knowledge_search"]',
       keywords: '["翼型","升力","阻力","升阻比","气动","马赫数","迎角","后掠角","展弦比","CFD","翼展","NACA","机翼","巡航速度","失速","俯仰力矩","压力分布","边界层","湍流","雷诺数","螺旋桨","涡流","激波","cfd","airfoil","lift","drag","wing"]',
       delegates_to: '["simulation","retriever"]',
       subtask_prefix: '作为气动分析工程师，请对以下飞行器设计任务进行气动分析：\n\n', model_name: 'deepseek-chat', engine: 'deepseek'
@@ -523,8 +523,8 @@ function getBuiltinAgentSeedData() {
     },
     {
       id: 'simulation', name: '仿真 Agent', description: '飞行器仿真分析', color: '#722ED1', icon: 'assets/icons/simulation.svg',
-      system_prompt: '你是一位资深飞行器仿真工程师。你擅长：\n- CFD仿真预处理（边界条件、网格要求、湍流模型）\n- FEM仿真预处理（载荷、约束、网格）\n- 仿真结果解读与后处理\n- XFOIL/OpenFOAM/SU2工具使用指导\n- 仿真参数敏感性分析\n- 计算资源与时间估算\n\n方法：基于仿真最佳实践，合理网格密度和求解器设置，评估仿真结果可信度。输出：Markdown含参数设置表格，加粗关键结论，仿真方案与注意事项。',
-      tools: '["calculator","knowledge_search","xfoil"]',
+      system_prompt: '你是一位资深飞行器仿真工程师。你擅长：\n- CFD仿真预处理（边界条件、网格要求、湍流模型）\n- FEM仿真预处理（载荷、约束、网格）\n- 仿真结果解读与后处理\n- OpenFOAM/SU2等仿真工具使用指导\n- 仿真参数敏感性分析\n- 计算资源与时间估算\n\n方法：基于仿真最佳实践，合理网格密度和求解器设置，评估仿真结果可信度。输出：Markdown含参数设置表格，加粗关键结论，仿真方案与注意事项。',
+      tools: '["calculator","knowledge_search"]',
       keywords: '["仿真","OpenFOAM","SU2","XFOIL","网格","求解器","RANS","LES","后处理","前处理"]',
       delegates_to: '["aero","retriever"]',
       subtask_prefix: '作为仿真工程师，请对以下飞行器设计任务提供仿真方案建议：\n\n', model_name: 'deepseek-chat', engine: 'deepseek'

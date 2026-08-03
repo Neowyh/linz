@@ -3,6 +3,7 @@ import { message as antdMessage, Collapse } from 'antd'
 import { useState } from 'react'
 import type { ChatMessage as ChatMessageType, ToolCallEntry } from '../../types/chat'
 import { resolveAgentDisplaySnapshot } from '../../utils/agentDisplay'
+import { extractImagesToFiles, convertContentSvgToPng } from '../../utils/exportImages'
 import MarkdownRenderer from '../Markdown/MarkdownRenderer'
 import AgentBadge from './AgentBadge'
 
@@ -150,20 +151,23 @@ export default function ChatMessage({ message }: ChatMessageProps): JSX.Element 
     : '助手'
   const fileBase = `LINZ_${agentLabel}_${new Date().toISOString().slice(0, 10)}`
 
-  const handleExportMarkdown = (): void => {
+  const handleExportMarkdown = async (): Promise<void> => {
     if (!message.content) {
       antdMessage.warning('消息内容为空')
       return
     }
-    const md = `# ${agentLabel} 回复\n\n导出时间: ${new Date().toLocaleString('zh-CN')}\n\n---\n\n${message.content}\n`
-    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${fileBase}.md`
-    a.click()
-    URL.revokeObjectURL(url)
-    antdMessage.success('已导出为 Markdown')
+    // 文件夹导出：.md + images/ 子目录（图片以相对路径引用，避免 data URL 不被查看器支持）
+    const dirPath = await window.aeromind.export.saveDirectory()
+    if (!dirPath) return
+    const { content: mdContent, images } = await extractImagesToFiles(message.content)
+    const md = `# ${agentLabel} 回复\n\n导出时间: ${new Date().toLocaleString('zh-CN')}\n\n---\n\n${mdContent}\n`
+    await window.aeromind.export.saveMarkdownBundle({
+      dirPath,
+      fileName: `${fileBase}.md`,
+      mdContent: md,
+      images
+    })
+    antdMessage.success(images.length > 0 ? `已导出为 Markdown（含 ${images.length} 张图片）` : '已导出为 Markdown')
   }
 
   const handleExportWord = async (): Promise<void> => {
@@ -179,11 +183,13 @@ export default function ChatMessage({ message }: ChatMessageProps): JSX.Element 
         defaultPath: `${fileBase}.docx`
       })
       if (!filePath) return
+      // SVG 转 PNG（docx 不支持 SVG），Word 导出器会把 PNG data URL 渲染为图片
+      const content = await convertContentSvgToPng(message.content)
       const exportMessages = [{
         id: message.id,
         role: message.role,
         agentType: message.agentType,
-        content: message.content,
+        content,
         createdAt: message.createdAt
       }]
       const base64 = await window.aeromind.export.word(exportMessages, {

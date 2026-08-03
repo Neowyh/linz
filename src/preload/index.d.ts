@@ -350,6 +350,13 @@ export interface AeromindAPI {
     word(messages: Array<{ id: string; role: string; agentType?: string; content: string; createdAt?: string }>, options?: { includeMetadata?: boolean; includeAgentBadges?: boolean; title?: string }): Promise<string>
     pdf(messages: Array<{ id: string; role: string; agentType?: string; content: string; createdAt?: string }>, options?: { includeMetadata?: boolean; includeAgentBadges?: boolean; title?: string }): Promise<string>
     saveFile(filePath: string, dataBase64: string): Promise<{ success: boolean; filePath: string }>
+    saveDirectory(): Promise<string | null>
+    saveMarkdownBundle(payload: {
+      dirPath: string
+      fileName: string
+      mdContent: string
+      images: Array<{ name: string; base64: string }>
+    }): Promise<{ success: boolean; mdPath: string }>
   }
   ollama: {
     check(): Promise<boolean>
@@ -367,6 +374,9 @@ export interface AeromindAPI {
     delete(id: string): Promise<{ success: boolean; error?: string }>
     rename(id: string, name: string): Promise<{ success: boolean }>
     onChanged(callback: (id: string) => void): () => void
+  }
+  browser: {
+    onOpenInNewTab(callback: (data: { url: string; guestId: number }) => void): () => void
   }
   terminal: {
     spawn(opts?: { cwd?: string }): Promise<{ sessionId: string }>
@@ -390,6 +400,9 @@ export interface AeromindAPI {
     detectPython(): Promise<{ path: string | null }>
     detectCatiaServer(): Promise<{ path: string | null; valid: boolean }>
     detectAbaqusServer(): Promise<{ path: string | null; valid: boolean }>
+  }
+  menu: {
+    onAction(callback: (data: { action: string; payload?: unknown }) => void): () => void
   }
 }
 

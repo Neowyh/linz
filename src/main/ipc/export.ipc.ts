@@ -66,4 +66,42 @@ export function registerExportIPC(_mainWindow: BrowserWindow): void {
       return { success: true, filePath }
     }
   )
+
+  // Markdown 文件夹导出：选择导出目录
+  ipcMain.handle('export:saveDirectory', async () => {
+    const result = await dialog.showOpenDialog({
+      title: '选择导出文件夹',
+      properties: ['openDirectory', 'createDirectory']
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    return result.filePaths[0]
+  })
+
+  // Markdown 文件夹导出：写 .md + images/ 子目录（图片以相对路径引用）
+  ipcMain.handle(
+    'export:saveMarkdownBundle',
+    async (
+      _event,
+      payload: {
+        dirPath: string
+        fileName: string
+        mdContent: string
+        images: Array<{ name: string; base64: string }>
+      }
+    ) => {
+      const { dirPath, fileName, mdContent, images } = payload
+      const safeName = fileName.replace(/[\\/:*?"<>|]/g, '_')
+      const mdPath = path.join(dirPath, safeName)
+      fs.writeFileSync(mdPath, mdContent, 'utf8')
+      if (images && images.length > 0) {
+        const imgDir = path.join(dirPath, 'images')
+        if (!fs.existsSync(imgDir)) fs.mkdirSync(imgDir, { recursive: true })
+        for (const img of images) {
+          const safeImgName = img.name.replace(/[\\/:*?"<>|]/g, '_')
+          fs.writeFileSync(path.join(imgDir, safeImgName), Buffer.from(img.base64, 'base64'))
+        }
+      }
+      return { success: true, mdPath }
+    }
+  )
 }

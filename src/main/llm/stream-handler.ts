@@ -3,6 +3,7 @@ import { SystemMessage, HumanMessage, AIMessage, BaseMessage, ToolMessage } from
 import type { Tool } from '@langchain/core/tools'
 import { withRetry } from './retry'
 import { createFallbackModel, createOllamaModel, isOllamaAvailable } from './index'
+import { extractImageBlocks } from './image-protocol'
 
 export interface StreamOptions {
   systemPrompt: string
@@ -19,6 +20,7 @@ export interface ToolCallResult {
   tool: string
   input: string
   output: string
+  images?: string[]  // 工具输出中的图片 data URL（已从 output 剥离）
 }
 
 export type StreamOutput = string | ToolCallResult
@@ -91,12 +93,14 @@ async function executeToolCalls(
     const input = typeof tc.args === 'string' ? tc.args : JSON.stringify(tc.args)
     try {
       const outputStr = await invokeWithTimeout(tool, tc.args, signal)
+      // 提取图片块（完整保留，直接进对话流），回传 LLM 的文本剥离图片，避免 base64 撑爆上下文
+      const { cleanText, images } = extractImageBlocks(outputStr)
       // 截断超长输出，避免 LLM 上下文溢出
-      const finalOutput = outputStr.length > MAX_TOOL_OUTPUT
-        ? outputStr.slice(0, MAX_TOOL_OUTPUT) + `\n\n... (已截断，原始输出 ${outputStr.length} 字符)`
-        : outputStr
+      const finalOutput = cleanText.length > MAX_TOOL_OUTPUT
+        ? cleanText.slice(0, MAX_TOOL_OUTPUT) + `\n\n... (已截断，原始输出 ${cleanText.length} 字符)`
+        : cleanText
       messages.push(new ToolMessage({ content: finalOutput, tool_call_id: tc.id! }))
-      results.push({ type: 'tool_call', tool: tc.name, input, output: finalOutput })
+      results.push({ type: 'tool_call', tool: tc.name, input, output: finalOutput, images })
     } catch (err: any) {
       if (signal?.aborted) break
       const errorMsg = `工具执行失败: ${err.message || String(err)}`
@@ -285,8 +289,13 @@ export async function* streamChat(
     // 执行工具
     const { messages: toolMessages, results } = await executeToolCalls(parsedToolCalls, options.tools!, options.signal)
 
-    // Yield 工具调用结果给 UI
+    // Yield 工具调用结果给 UI；工具产生的图片先以 markdown 图片进入对话流
     for (const result of results) {
+      if (result.images && result.images.length > 0) {
+        for (const img of result.images) {
+          yield `\n\n![图表](${img})\n\n`
+        }
+      }
       yield result
     }
 

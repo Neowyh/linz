@@ -10,7 +10,11 @@ import ChatInput from '../components/Chat/ChatInput'
 import MessageList from '../components/Chat/MessageList'
 import TaskTemplate, { DEFAULT_TASK_TEMPLATES } from '../components/Chat/TaskTemplate'
 import AgentIcon from '../components/AgentIcon'
-import { resolveAgentDisplaySnapshot } from '../utils/agentDisplay'
+import {
+  exportConversationMarkdown,
+  exportConversationWord,
+  exportConversationPdf
+} from '../utils/exportChat'
 
 export default function ChatPage(): JSX.Element {
   const messages = useChatStore((s) => s.messages)
@@ -33,59 +37,26 @@ export default function ChatPage(): JSX.Element {
     sendMessage(prompt)
   }
 
-  // 导出对话为 Markdown 文件
-  const handleExport = useCallback(() => {
-    if (messages.length === 0) return
-
-    let md = '# 临智 LINZ 对话导出\n\n'
-    md += `导出时间: ${new Date().toLocaleString('zh-CN')}\n\n---\n\n`
-
-    for (const msg of messages) {
-      if (msg.role === 'user') {
-        md += `## 👤 用户\n\n${msg.content}\n\n`
-      } else {
-        const agentLabel = msg.agentType ? `🤖 ${resolveAgentDisplaySnapshot(msg.agentType).name}` : '🤖 助手'
-        md += `## ${agentLabel}\n\n${msg.content}\n\n`
-      }
-    }
-
-    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `LINZ_${new Date().toISOString().slice(0, 10)}.md`
-    a.click()
-    URL.revokeObjectURL(url)
-    message.success('对话已导出为 Markdown')
-  }, [messages])
-
-  // 导出为 Word/PDF
+  // 导出对话（复用 utils/exportChat，与菜单"文件 → 导出对话"共用同一实现）
   const [exporting, setExporting] = useState(false)
+
+  const handleExport = useCallback(async () => {
+    if (messages.length === 0 || exporting) return
+    setExporting(true)
+    try {
+      await exportConversationMarkdown(messages)
+    } catch (err: any) {
+      message.error(`导出失败: ${err.message || '未知错误'}`)
+    } finally {
+      setExporting(false)
+    }
+  }, [messages, exporting])
 
   const handleExportWord = useCallback(async () => {
     if (messages.length === 0 || exporting) return
     setExporting(true)
     try {
-      const filePath = await window.aeromind.export.saveDialog({
-        format: 'word',
-        defaultPath: `LINZ_对话_${new Date().toISOString().slice(0, 10)}.docx`
-      })
-      if (!filePath) return
-
-      const exportMessages = messages.map(msg => ({
-        id: msg.id,
-        role: msg.role,
-        agentType: msg.agentType,
-        content: msg.content,
-        createdAt: msg.createdAt
-      }))
-
-      const base64 = await window.aeromind.export.word(exportMessages, {
-        includeAgentBadges: true,
-        title: 'LINZ 对话记录'
-      })
-      await window.aeromind.export.saveFile(filePath, base64)
-      message.success('对话已导出为 Word 文档')
+      await exportConversationWord(messages)
     } catch (err: any) {
       message.error(`导出失败: ${err.message || '未知错误'}`)
     } finally {
@@ -97,26 +68,7 @@ export default function ChatPage(): JSX.Element {
     if (messages.length === 0 || exporting) return
     setExporting(true)
     try {
-      const filePath = await window.aeromind.export.saveDialog({
-        format: 'pdf',
-        defaultPath: `LINZ_对话_${new Date().toISOString().slice(0, 10)}.pdf`
-      })
-      if (!filePath) return
-
-      const exportMessages = messages.map(msg => ({
-        id: msg.id,
-        role: msg.role,
-        agentType: msg.agentType,
-        content: msg.content,
-        createdAt: msg.createdAt
-      }))
-
-      const base64 = await window.aeromind.export.pdf(exportMessages, {
-        includeAgentBadges: true,
-        title: 'LINZ 对话记录'
-      })
-      await window.aeromind.export.saveFile(filePath, base64)
-      message.success('对话已导出为 PDF')
+      await exportConversationPdf(messages)
     } catch (err: any) {
       message.error(`导出失败: ${err.message || '未知错误'}`)
     } finally {

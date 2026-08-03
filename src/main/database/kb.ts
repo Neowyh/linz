@@ -231,6 +231,7 @@ export function initKbDatabase(dbFilePath: string): void {
 export function switchKbDatabase(newPath: string): void {
   closeKbDatabase()
   initKbDatabase(newPath)
+  invalidateTagsCache()
 }
 
 export function closeKbDatabase(): void {
@@ -266,6 +267,7 @@ export function insertDocument(doc: {
        VALUES (?, ?, ?, ?, ?, ?, ?, 'indexing')`
     )
     .run(doc.id, doc.filePath, doc.fileName, doc.fileType, doc.fileSize, doc.fileHash ?? null, JSON.stringify(doc.tags ?? []))
+  invalidateTagsCache()
 }
 
 export function findDocumentByHash(hash: string): KbDocumentRow | undefined {
@@ -284,6 +286,7 @@ export function markDocumentError(docId: string): void {
 
 export function updateDocumentTags(docId: string, tags: string[]): void {
   getKbDatabase().prepare('UPDATE kb_documents SET tags = ? WHERE id = ?').run(JSON.stringify(tags), docId)
+  invalidateTagsCache()
 }
 
 export function updateDocumentDomain(docId: string, domain: string): void {
@@ -324,14 +327,26 @@ export function deleteDocuments(docIds: string[]): void {
     }
   })
   tx(docIds)
+  invalidateTagsCache()
 }
+
+// 标签缓存：listAllTags 需 json_each 全表扫描，知识库大时开销明显。
+// 标签只在导入/删除/编辑/切库时变化，缓存 + 失效即可（同一函数内定义避免循环引用问题）
+let tagsCache: string[] | null = null
+
+function invalidateTagsCache(): void {
+  tagsCache = null
+}
+
+// 列表查询用显式列名（列表不需要 embedding 等大字段；未来表加列也不会被 SELECT * 带出）
+const DOCUMENT_LIST_COLUMNS = 'id, file_path, file_name, file_type, domain_category, tags, file_hash, index_status, chunk_count, file_size, added_at, indexed_at'
 
 export function listDocuments(category?: string): KbDocumentRow[] {
   const db = getKbDatabase()
   if (category && category !== '全部') {
-    return db.prepare('SELECT * FROM kb_documents WHERE domain_category = ? ORDER BY added_at DESC').all(category) as KbDocumentRow[]
+    return db.prepare(`SELECT ${DOCUMENT_LIST_COLUMNS} FROM kb_documents WHERE domain_category = ? ORDER BY added_at DESC`).all(category) as KbDocumentRow[]
   }
-  return db.prepare('SELECT * FROM kb_documents ORDER BY added_at DESC').all() as KbDocumentRow[]
+  return db.prepare(`SELECT ${DOCUMENT_LIST_COLUMNS} FROM kb_documents ORDER BY added_at DESC`).all() as KbDocumentRow[]
 }
 
 export function getStats(): { totalDocuments: number; totalChunks: number; categories: Array<{ category: string; count: number }> } {
@@ -347,10 +362,12 @@ export function listCategories(): string[] {
   return ['全部', ...rows.map((r) => r.c)]
 }
 
-// 汇总所有文档的标签（去重）
+// 汇总所有文档的标签（去重，带缓存）
 export function listAllTags(): string[] {
+  if (tagsCache) return tagsCache
   const rows = getKbDatabase().prepare(`SELECT DISTINCT je.value t FROM kb_documents, json_each(kb_documents.tags) je ORDER BY t`).all() as Array<{ t: string }>
-  return rows.map((r) => r.t)
+  tagsCache = rows.map((r) => r.t)
+  return tagsCache
 }
 
 export function getFileName(documentId: string): string {

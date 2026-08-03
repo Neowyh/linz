@@ -1,5 +1,5 @@
 import { useNavigate, useLocation } from 'react-router-dom'
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import {
   PlusOutlined,
   ClockCircleOutlined,
@@ -52,6 +52,19 @@ export default function Sidebar(): JSX.Element {
   const [searchTerm, setSearchTerm] = useState('')
   const [modelLabel, setModelLabel] = useState('DeepSeek')
   const [modelProvider, setModelProvider] = useState<'cloud' | 'ollama' | 'offline'>('cloud')
+  const searchInputRef = useRef<any>(null)
+
+  // 菜单"编辑 → 搜索对话"(Ctrl+F) 聚焦侧边栏搜索框
+  useEffect(() => {
+    const handleFocusSearch = (): void => {
+      searchInputRef.current?.focus()
+      searchInputRef.current?.select()
+    }
+    window.addEventListener('menu:focus-search', handleFocusSearch)
+    return () => {
+      window.removeEventListener('menu:focus-search', handleFocusSearch)
+    }
+  }, [])
 
   const filteredConversations = useMemo(() => {
     if (!searchTerm.trim()) return conversations
@@ -134,6 +147,7 @@ export default function Sidebar(): JSX.Element {
       {/* 全局搜索 */}
       <div className="px-3 mb-2">
         <Input
+          ref={searchInputRef}
           prefix={<SearchOutlined className="text-gray-400" />}
           placeholder="搜索对话..."
           value={searchTerm}

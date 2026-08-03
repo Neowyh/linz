@@ -5,16 +5,17 @@ import { calculatorTool } from './calculator.tool'
 import { aeroCalculatorTool } from './aero-calculator.tool'
 import { knowledgeSearchTool, createKnowledgeSearchTool } from './knowledge-search.tool'
 import { dbTablesTool, dbQueryTool } from './db-query.tool'
-import { xfoilTool } from './xfoil.tool'
+import { plotChartTool } from './plot-chart.tool'
+import { dataAnalysisTool } from './data-analysis.tool'
 import { runSkillScriptTool } from './run-skill-script.tool'
 import { createDelegateTool } from './delegate.tool'
 import { createFilesystemTools } from './filesystem.tool'
 import { toolRegistry, type ToolInfo } from './registry'
 
 const DB_TOOLS: Tool[] = [dbTablesTool, dbQueryTool]
-const AERO_TOOLS: Tool[] = [aeroCalculatorTool, calculatorTool, knowledgeSearchTool, xfoilTool, runSkillScriptTool, ...DB_TOOLS]
-const SIM_TOOLS: Tool[] = [calculatorTool, knowledgeSearchTool, xfoilTool, runSkillScriptTool, ...DB_TOOLS]
-const CALC_TOOLS: Tool[] = [calculatorTool, knowledgeSearchTool, runSkillScriptTool, ...DB_TOOLS]
+const AERO_TOOLS: Tool[] = [aeroCalculatorTool, calculatorTool, knowledgeSearchTool, plotChartTool, dataAnalysisTool, runSkillScriptTool, ...DB_TOOLS]
+const SIM_TOOLS: Tool[] = [calculatorTool, knowledgeSearchTool, plotChartTool, dataAnalysisTool, runSkillScriptTool, ...DB_TOOLS]
+const CALC_TOOLS: Tool[] = [calculatorTool, knowledgeSearchTool, plotChartTool, dataAnalysisTool, runSkillScriptTool, ...DB_TOOLS]
 const KB_TOOLS: Tool[] = [knowledgeSearchTool, runSkillScriptTool, ...DB_TOOLS]
 
 const BUILTIN_TOOL_MAP: Record<string, Tool[]> = {
@@ -36,7 +37,8 @@ const BUILTIN_TOOL_INFOS: Array<{ name: string; description: string; tool: Tool 
   { name: 'knowledge_search', description: '知识库检索', tool: knowledgeSearchTool },
   { name: 'db_tables', description: '列出表格数据库中的数据表结构', tool: dbTablesTool },
   { name: 'db_query', description: '对表格数据库执行只读 SQL 查询', tool: dbQueryTool },
-  { name: 'xfoil', description: 'XFOIL 翼型分析', tool: xfoilTool },
+  { name: 'plot_chart', description: '绘制数据图表并直接显示在对话中（折线/柱状/散点/面积/饼图）', tool: plotChartTool },
+  { name: 'data_analysis', description: '统计分析（描述统计/相关/回归拟合/t 检验/正态性/平滑）', tool: dataAnalysisTool },
   { name: 'run_skill_script', description: '执行技能包附带脚本（.py/.js/.bat 等）', tool: runSkillScriptTool }
 ]
 
@@ -57,7 +59,8 @@ export const AVAILABLE_TOOL_NAMES = [
   { name: 'knowledge_search', description: '知识库检索' },
   { name: 'db_tables', description: '列出表格数据库中的数据表结构' },
   { name: 'db_query', description: '对表格数据库执行只读 SQL 查询' },
-  { name: 'xfoil', description: 'XFOIL 翼型分析' },
+  { name: 'plot_chart', description: '绘制数据图表并直接显示在对话中（折线/柱状/散点/面积/饼图）' },
+  { name: 'data_analysis', description: '统计分析（描述统计/相关/回归拟合/t 检验/正态性/平滑）' },
   { name: 'run_skill_script', description: '执行技能包附带脚本（.py/.js/.bat 等）' },
   { name: 'delegate_to_agent', description: '委派子任务给其他专业 Agent' }
 ]

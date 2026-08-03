@@ -2,6 +2,7 @@ import { Outlet } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import SettingsModal from './SettingsModal'
 import RightPanel from './RightPanel'
+import MenuActionHandler from './MenuActionHandler'
 import { useStreaming } from '../../hooks/useStreaming'
 import { useUIStore } from '../../stores/uiStore'
 
@@ -24,6 +25,8 @@ export default function AppLayout(): JSX.Element {
       </main>
       <RightPanel />
       <SettingsModal />
+      {/* 应用菜单动作分发（文件/编辑/视图/导航菜单） */}
+      <MenuActionHandler />
     </div>
   )
 }

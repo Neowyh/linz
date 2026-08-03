@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { Button, Tag, Input, Empty, message, Progress, Popconfirm, Modal, Select, Checkbox, AutoComplete, Tabs } from 'antd'
+import { useState, useEffect, useMemo } from 'react'
+import { Button, Tag, Input, Empty, message, Progress, Popconfirm, Modal, Select, Checkbox, AutoComplete, Tabs, Pagination } from 'antd'
 import { DeleteOutlined, SearchOutlined, TagsOutlined, EditOutlined, FolderOpenOutlined } from '@ant-design/icons'
 import MarkdownRenderer from '../components/Markdown/MarkdownRenderer'
 import KbTablesTab from '../components/KbTablesTab'
@@ -130,6 +130,7 @@ export default function KnowledgePage(): JSX.Element {
 
   useEffect(() => {
     setSelectedIds([]) // 切换分类时清空选择，避免误删不可见文档
+    setPage(1)
     loadData()
   }, [activeCategory])
 
@@ -257,10 +258,19 @@ export default function KnowledgePage(): JSX.Element {
     loadData()
   }
 
-  // 文档列表按当前标签过滤
-  const filteredDocuments = activeTag
-    ? documents.filter((d) => (d.tags || []).includes(activeTag))
-    : documents
+  // 文档列表按当前标签过滤（useMemo 避免每次渲染全量 filter）
+  const filteredDocuments = useMemo(
+    () => (activeTag ? documents.filter((d) => (d.tags || []).includes(activeTag)) : documents),
+    [documents, activeTag]
+  )
+
+  // 分页渲染，避免大知识库一次性渲染全部 DOM
+  const PAGE_SIZE = 50
+  const [page, setPage] = useState(1)
+  const pageDocuments = useMemo(
+    () => filteredDocuments.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [filteredDocuments, page]
+  )
 
   return (
     <div className="h-full overflow-y-auto p-6">
@@ -362,7 +372,10 @@ export default function KnowledgePage(): JSX.Element {
                 key={tag}
                 color={activeTag === tag ? 'blue' : 'default'}
                 className="cursor-pointer"
-                onClick={() => setActiveTag(activeTag === tag ? null : tag)}
+                onClick={() => {
+                  setActiveTag(activeTag === tag ? null : tag)
+                  setPage(1)
+                }}
               >
                 {tag}
               </Tag>
@@ -442,7 +455,7 @@ export default function KnowledgePage(): JSX.Element {
             <Empty description='暂无文档，点击"导入文档/文件夹"开始构建知识库' />
           ) : (
             <div className="space-y-2">
-              {filteredDocuments.map((doc) => (
+              {pageDocuments.map((doc) => (
                 <div key={doc.id} className="bg-white rounded-card border border-line-light p-4 shadow-card flex items-center justify-between">
                   <div className="flex items-center gap-3 flex-1 min-w-0">
                     <Checkbox
@@ -480,6 +493,16 @@ export default function KnowledgePage(): JSX.Element {
                 </div>
               ))}
             </div>
+          )}
+          {filteredDocuments.length > PAGE_SIZE && (
+            <Pagination
+              current={page}
+              pageSize={PAGE_SIZE}
+              total={filteredDocuments.length}
+              onChange={setPage}
+              showSizeChanger={false}
+              className="mt-4 flex justify-center"
+            />
           )}
         </div>
 

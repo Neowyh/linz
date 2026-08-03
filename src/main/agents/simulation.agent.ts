@@ -10,7 +10,7 @@ const SIMULATION_SYSTEM_PROMPT = `你是一名资深飞行器仿真工程师（�
 - CFD仿真前处理建议（边界条件、网格要求、湍流模型）
 - FEM仿真前处理建议（载荷、约束、网格）
 - 仿真结果解析与后处理
-- XFOIL/OpenFOAM/SU2等工具的使用指导
+- OpenFOAM/SU2等仿真工具的使用指导
 - 仿真参数敏感性分析
 - 计算资源与时间估算
 

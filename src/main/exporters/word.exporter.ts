@@ -13,7 +13,8 @@ import {
   TableCell,
   WidthType,
   ShadingType,
-  Math as DocxMath
+  Math as DocxMath,
+  ImageRun
 } from 'docx'
 import { latexToDocxMath } from './latex-to-omml'
 
@@ -59,6 +60,52 @@ function getAgentColor(agentType: string): string {
 
 function getAgentName(agentType: string): string {
   return AGENT_NAMES[agentType] || agentType
+}
+
+// ============ 图片支持 ============
+
+// 独立行的 markdown 图片：![alt](data:image/png;base64,...)
+const IMAGE_LINE_RE = /^!\[([^\]]*)\]\((data:image\/(?:png|jpeg|jpg);base64,[A-Za-z0-9+/=]+)\)\s*$/
+
+// 解析 PNG 尺寸（IHDR 固定布局，无需外部库）
+function parsePngSize(buf: Buffer): { width: number; height: number } | null {
+  if (buf.length < 24) return null
+  const sig = buf.subarray(0, 8)
+  if (!sig.equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return null
+  if (buf.toString('latin1', 12, 16) !== 'IHDR') return null
+  const width = buf.readUInt32BE(16)
+  const height = buf.readUInt32BE(20)
+  if (!width || !height || width > 10000 || height > 10000) return null
+  return { width, height }
+}
+
+// 页面可用宽度约 601px（A4 - 边距），留边距取 580；等比缩放不放大
+const IMAGE_MAX_WIDTH = 580
+
+function buildImageParagraph(dataUrl: string): Paragraph | null {
+  try {
+    const b64 = dataUrl.slice(dataUrl.indexOf('base64,') + 7)
+    const buf = Buffer.from(b64, 'base64')
+    if (buf.length === 0 || buf.length > 20 * 1024 * 1024) return null
+    const size = parsePngSize(buf)
+    if (!size) return null
+    const scale = Math.min(1, IMAGE_MAX_WIDTH / size.width)
+    const width = Math.round(size.width * scale)
+    const height = Math.round(size.height * scale)
+    return new Paragraph({
+      children: [
+        new ImageRun({
+          data: buf,
+          type: 'png',
+          transformation: { width, height }
+        })
+      ],
+      alignment: AlignmentType.CENTER,
+      spacing: { before: 120, after: 120 }
+    })
+  } catch {
+    return null
+  }
 }
 
 function parseMarkdownToDocx(content: string): Paragraph[] {
@@ -531,6 +578,17 @@ function parseMarkdownToDocxContent(content: string): (Paragraph | Table)[] {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
+
+    // 图片行：![alt](data:image/png;base64,...) → 居中 ImageRun
+    const imageMatch = IMAGE_LINE_RE.exec(line.trim())
+    if (imageMatch) {
+      const imgParagraph = buildImageParagraph(imageMatch[2])
+      if (imgParagraph) {
+        result.push(imgParagraph)
+        continue
+      }
+      // 解析失败则回退为普通文本（保留原文，不丢内容）
+    }
 
     // 跨行显示公式块：在 $$ 与 $$ 之间累积
     if (inMathBlock) {
