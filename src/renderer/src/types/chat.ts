@@ -8,6 +8,12 @@ export interface ToolCallEntry {
   isComplete?: boolean
 }
 
+export interface SkillTriggerInfo {
+  skillId: string
+  skillName: string
+  source: 'forced' | 'matched'  // forced=用户 "/" 主动注入；matched=关键词自动匹配
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'agent'
@@ -15,6 +21,7 @@ export interface ChatMessage {
   content: string
   thinking?: string  // agent 思考过程（Pi thinking_delta 累积）
   toolCalls?: ToolCallEntry[]  // 工具调用记录
+  skillTriggers?: SkillTriggerInfo[]  // 技能触发记录（强制注入/关键词匹配）
   isStreaming?: boolean
   createdAt: string
 }

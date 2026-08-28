@@ -18,12 +18,22 @@ export interface OllamaConfig {
   enabled: boolean
 }
 
+export type ToolPolicyAction = 'allow' | 'ask' | 'deny'
+
+export interface RememberedApproval {
+  fingerprint: string  // 工具名 + 归一化参数的稳定串，精确限定"始终允许"作用域
+  toolName: string
+  argsSummary: string
+  ts: number
+}
+
 export interface Workspace {
   id: string
   name: string
   path: string
   createdAt: string
   lastOpenedAt: string
+  folder?: string  // 该工作区绑定的文件工作空间目录（agent 文件工具 + 文件管理器共用）
 }
 
 interface AppConfigSchema {
@@ -44,6 +54,13 @@ interface AppConfigSchema {
   fileWorkspacePath: string  // agent 文件读写工具的合法根目录，空字符串表示未设置
   skillScriptEnabled: boolean  // 允许 Agent 执行技能包附带脚本（run_skill_script 工具总开关，默认关）
   trustedSkillPackages: string[]  // 用户已信任的技能 ID 列表（信任后脚本直接执行，不再弹窗）
+  toolPermissions: Record<string, ToolPolicyAction>  // 按工具策略覆盖：allow/ask/deny（全局按工具粒度）
+  rememberedApprovals: RememberedApproval[]  // 用户"始终允许"的操作（按指纹精确匹配，可撤销）
+  approvalTimeoutMs: number  // 审批等待超时（毫秒），超时自动拒绝，默认 120000
+  restrictNetwork: boolean  // 脚本执行尽力禁网（Windows 上为尽力而为）
+  permissionMode: 'default' | 'full'  // default=每类危险操作逐次询问 | full=完全访问（仅文件写入仍提醒，其余放行）
+  protectedPaths: string[]  // 文件防护：受保护的敏感文件/目录，Agent 工具访问时一律拦截
+  quitOnClose: boolean  // 生产模式下关闭窗口时退出进程（true=退出，false=最小化到托盘）
 }
 
 let appConfig: Store<AppConfigSchema>
@@ -73,7 +90,14 @@ const defaults: AppConfigSchema = {
   },
   fileWorkspacePath: '',
   skillScriptEnabled: false,
-  trustedSkillPackages: []
+  trustedSkillPackages: [],
+  toolPermissions: {},
+  rememberedApprovals: [],
+  approvalTimeoutMs: 120000,
+  restrictNetwork: false,
+  permissionMode: 'default',
+  protectedPaths: [],
+  quitOnClose: true
 }
 
 export function getAppConfig(): Store<AppConfigSchema> {
@@ -192,4 +216,28 @@ export function renameWorkspace(id: string, name: string): boolean {
 export function listWorkspaces(): Workspace[] {
   const config = getAppConfig()
   return config.get('workspaces.list') || []
+}
+
+// --- 文件工作空间目录（Agent 文件工具 + 文件管理器共用）---
+// 优先取当前工作区绑定的目录；旧版本只写了全局 fileWorkspacePath 字段，
+// 未绑定到工作区时回退读取全局值，保证升级后原有设置不丢。
+
+export function getFileWorkspacePath(): string {
+  const ws = getCurrentWorkspace()
+  if (ws?.folder) return ws.folder
+  return (getAppConfig().get('fileWorkspacePath') as string) || ''
+}
+
+// 同时写入全局字段与当前工作区绑定，两条读取路径保持一致。
+export function setFileWorkspacePath(folder: string): void {
+  const config = getAppConfig()
+  config.set('fileWorkspacePath', folder)
+  const ws = getCurrentWorkspace()
+  if (!ws) return
+  const list: Workspace[] = config.get('workspaces.list') || []
+  const idx = list.findIndex((w) => w.id === ws.id)
+  if (idx >= 0) {
+    list[idx].folder = folder
+    config.set('workspaces.list', list)
+  }
 }

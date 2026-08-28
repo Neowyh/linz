@@ -56,23 +56,48 @@ export function createDelegateTool(deps: DelegateToolDeps): DynamicStructuredToo
 
       try {
         const chunks: string[] = []
-        const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('委派超时')), DELEGATION_TIMEOUT_MS)
-        )
+        let timer: NodeJS.Timeout | null = null
+        // 给委派任务独立的 AbortController：超时或外部 abort 时，
+        // 既放弃 Promise.race 等待，也通过 signal 通知被委派 agent.run() 停止（agent.run 内多处检查 signal.aborted）。
+        const delegateAbort = new AbortController()
+        const onParentAbort = (): void => { delegateAbort.abort() }
+        if (context.signal.aborted) {
+          delegateAbort.abort()
+        } else {
+          context.signal.addEventListener('abort', onParentAbort, { once: true })
+        }
 
-        const runPromise = (async () => {
-          for await (const chunk of agent.run(task, delegateContext)) {
-            if (context.signal.aborted) break
-            if (chunk.content) {
-              chunks.push(chunk.content)
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            delegateAbort.abort()  // 通知被委派 agent 停止
+            reject(new Error('委派超时'))
+          }, DELEGATION_TIMEOUT_MS)
+        })
+
+        // 被委派 agent 的 context 用 delegateAbort.signal 替换，确保超时/abort 能传播
+        const delegateRunContext: AgentContext = {
+          ...delegateContext,
+          signal: delegateAbort.signal
+        }
+
+        try {
+          const runPromise = (async () => {
+            for await (const chunk of agent.run(task, delegateRunContext)) {
+              if (delegateAbort.signal.aborted || context.signal.aborted) break
+              if (chunk.content) {
+                chunks.push(chunk.content)
+              }
+              onChunk?.(chunk)
             }
-            onChunk?.(chunk)
-          }
-          return chunks.join('')
-        })()
+            return chunks.join('')
+          })()
 
-        const result = await Promise.race([runPromise, timeoutPromise])
-        return result || '（委派的 Agent 未返回内容）'
+          const result = await Promise.race([runPromise, timeoutPromise])
+          return result || '（委派的 Agent 未返回内容）'
+        } finally {
+          if (timer) clearTimeout(timer)
+          context.signal.removeEventListener('abort', onParentAbort)
+        }
       } catch (err: any) {
         if (context.signal.aborted) {
           return '委派已取消'

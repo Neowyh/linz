@@ -12,11 +12,13 @@ import {
   EditOutlined,
   SearchOutlined,
   RobotOutlined,
-  RocketOutlined
+  RocketOutlined,
+  DoubleLeftOutlined
 } from '@ant-design/icons'
 import { Popconfirm, Input, message } from 'antd'
 import { useConversationStore } from '../../stores/conversationStore'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { useUIStore } from '../../stores/uiStore'
 import WorkspaceSwitcher from './WorkspaceSwitcher'
 
 interface NavItem {
@@ -46,6 +48,7 @@ export default function Sidebar(): JSX.Element {
   const setShowSettings = useSettingsStore((s) => s.setShowSettings)
   const loadSettings = useSettingsStore((s) => s.loadSettings)
   const ollamaEnabled = useSettingsStore((s) => s.ollama.enabled)
+  const toggleLeftPanel = useUIStore((s) => s.toggleLeftPanel)
 
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState('')
@@ -137,6 +140,14 @@ export default function Sidebar(): JSX.Element {
           <RocketOutlined className="text-white text-base" />
         </div>
         <span className="text-base font-semibold tracking-wide text-gray-900">临智 LINZ</span>
+        <button
+          onClick={toggleLeftPanel}
+          className="ml-auto p-1.5 text-gray-400 hover:text-primary hover:bg-gray-100 rounded transition-colors"
+          title="隐藏侧边栏"
+          aria-label="隐藏侧边栏"
+        >
+          <DoubleLeftOutlined style={{ fontSize: 12 }} />
+        </button>
       </div>
 
       {/* 工作区切换器 */}

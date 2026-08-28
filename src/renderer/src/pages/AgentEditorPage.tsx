@@ -6,6 +6,7 @@ import { useCustomAgentStore } from '../stores/customAgentStore'
 import { AGENT_NAMES } from '../types/agent'
 import type { BuiltinAgentType } from '../types/agent'
 import { isMcpServerMarker, parseMcpServerMarker, buildMcpServerMarker } from '../types/customAgent'
+import { AgentIconPicker, AGENT_ICON_OPTIONS } from '../components/AgentIconPicker'
 import type { ToolInfo } from '../types/customAgent'
 
 const { TextArea } = Input
@@ -229,14 +230,14 @@ export default function AgentEditorPage(): JSX.Element {
       } else if (isEditing && id) {
         const result = await updateAgent(id, {
           name: name.trim(),
-          description: description.trim() || undefined,
+          description: description.trim() || null,
           color,
           icon,
           systemPrompt: systemPrompt.trim(),
           tools,
           keywords,
           delegates_to: JSON.stringify(delegatesTo),
-          subtaskPrefix: subtaskPrefix.trim() || undefined,
+          subtaskPrefix: subtaskPrefix.trim() || null,
           modelName: modelName.trim() || 'deepseek-chat',
           engine,
           kbTags
@@ -257,7 +258,7 @@ export default function AgentEditorPage(): JSX.Element {
           tools,
           keywords,
           delegates_to: JSON.stringify(delegatesTo),
-          subtaskPrefix: subtaskPrefix.trim() || undefined,
+          subtaskPrefix: subtaskPrefix.trim() || null,
           modelName: modelName.trim() || 'deepseek-chat',
           engine,
           kbTags
@@ -371,14 +372,17 @@ export default function AgentEditorPage(): JSX.Element {
           {/* Icon */}
           <div>
             <label className="text-sm font-medium text-gray-900 mb-1 block">图标</label>
-            <div className="flex items-center gap-2">
-              <span className="text-2xl">{icon}</span>
+            <Text className="text-xs text-gray-600 block mb-2">
+              选择内置图标，也可以输入自定义 Emoji 或图标路径
+            </Text>
+            <AgentIconPicker value={icon} onChange={setIcon} options={AGENT_ICON_OPTIONS} />
+            <div className="flex items-center gap-2 mt-3">
+              <span className="text-2xl w-8 text-center">{icon}</span>
               <Input
                 value={icon}
                 onChange={(e) => setIcon(e.target.value)}
-                placeholder="输入 Emoji"
-                maxLength={4}
-                className="w-24"
+                placeholder="输入 Emoji 或图标路径"
+                className="flex-1"
               />
             </div>
           </div>

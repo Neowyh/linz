@@ -2,6 +2,15 @@ appId: com.linz.app
 productName: 临智 LINZ
 directories:
   buildResources: resources
+extraResources:
+  # 随包携带 pandoc 二进制（HTML→Word 转换工具 html_to_word 使用）
+  # 打包后落在 <安装目录>/resources/bin/win32/pandoc.exe
+  - from: resources/bin
+    to: bin
+  # 随包携带 occt-import-js（OpenCASCADE WASM，STEP 转网格用）
+  # 必须脱离 asar（asar 内 .wasm 会被改写，无法加载），打包后落在 <安装目录>/resources/occt/
+  - from: resources/occt
+    to: occt
 # 原生模块必须脱离 asar 打包（.node 二进制无法从 asar 加载）
 asarUnpack:
   - '**/node_modules/better-sqlite3/**'

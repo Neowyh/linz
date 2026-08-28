@@ -19,7 +19,7 @@ interface SessionEntry {
   systemPrompt: string
   provider: PiProvider
   cwd?: string
-  customToolsCount: number
+  customToolNames: string  // 工具名有序串指纹，用于复用判定（比数量更严，工具内容变化也触发重建）
 }
 
 const sessions = new Map<string, SessionEntry>()
@@ -169,16 +169,19 @@ export async function getOrCreateSession(
   const key = sessionKey(conversationId, agentType)
   const requestedProvider = opts.provider || 'deepseek'
 
-  // session 复用条件：systemPrompt + provider + cwd + customTools 数量都一致
-  // 任意变化都要重建（用户编辑了 agent / 切换工作空间 / 增减工具）
+  // session 复用条件：systemPrompt + provider + cwd + customToolNames 都一致
+  // 任意变化都要重建（用户编辑了 agent / 切换工作空间 / 增减/替换工具）
+  // 用工具名有序串而非数量：工具从 [calculator] 换成 [knowledge_search]（数量同）也会触发重建
   const existing = sessions.get(key)
-  const customToolsCount = opts.customTools?.length ?? 0
+  const customToolNames = (opts.customTools && opts.customTools.length > 0)
+    ? opts.customTools.map((t) => t.name).sort().join(',')
+    : ''
   if (
     existing &&
     existing.systemPrompt === opts.systemPrompt &&
     existing.provider === requestedProvider &&
     existing.cwd === opts.cwd &&
-    existing.customToolsCount === customToolsCount
+    existing.customToolNames === customToolNames
   ) {
     return existing.session
   }
@@ -203,9 +206,9 @@ export async function getOrCreateSession(
     systemPrompt: opts.systemPrompt,
     provider: requestedProvider,
     cwd: opts.cwd,
-    customToolsCount
+    customToolNames
   })
-  console.log(`[Pi] Session created for ${key} (provider=${requestedProvider}, cwd=${opts.cwd || '(default)'}, customTools=${customToolsCount})`)
+  console.log(`[Pi] Session created for ${key} (provider=${requestedProvider}, cwd=${opts.cwd || '(default)'}, customTools=${customToolNames || 'none'})`)
   return session
 }
 

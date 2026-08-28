@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ChatMessage, ToolCallEntry } from '../types/chat'
+import type { ChatMessage, ToolCallEntry, SkillTriggerInfo } from '../types/chat'
 import type { AgentType } from '../types/agent'
 
 interface ChatState {
@@ -17,8 +17,9 @@ interface ChatState {
   appendStreamChunk: (messageId: string, chunk: string) => void
   appendThinking: (messageId: string, delta: string) => void
   upsertToolCall: (messageId: string, toolCall: ToolCallEntry) => void
+  addSkillTriggers: (messageId: string, triggers: SkillTriggerInfo[]) => void
   startStreaming: (messageId: string) => void
-  endStreaming: () => void
+  endStreaming: (conversationId?: string) => void
   clearMessages: () => void
   loadMessages: (messages: ChatMessage[]) => void
   setSelectedAgent: (agent: string) => void
@@ -63,6 +64,7 @@ export const useChatStore = create<ChatState>((set) => ({
           content: '',
           thinking: '',
           toolCalls: [],
+          skillTriggers: [],
           isStreaming: true,
           createdAt: new Date().toISOString()
         }
@@ -105,16 +107,36 @@ export const useChatStore = create<ChatState>((set) => ({
       })
     })),
 
+  // 技能触发信息按 skillId 去重累积（同一技能可能强制+匹配重复报告）
+  addSkillTriggers: (messageId, triggers) =>
+    set((state) => ({
+      messages: state.messages.map((msg) => {
+        if (msg.id !== messageId) return msg
+        const existing = msg.skillTriggers ? [...msg.skillTriggers] : []
+        for (const t of triggers) {
+          if (!existing.some((e) => e.skillId === t.skillId)) existing.push(t)
+        }
+        return { ...msg, skillTriggers: existing }
+      })
+    })),
+
   startStreaming: (messageId) => set({ isStreaming: true, streamingMessageId: messageId }),
 
-  endStreaming: () =>
-    set((state) => ({
-      isStreaming: false,
-      streamingMessageId: null,
-      messages: state.messages.map((msg) =>
-        msg.isStreaming ? { ...msg, isStreaming: false } : msg
-      )
-    })),
+  // 仅当传入的 conversationId 与当前对话匹配（或未传，表示通用结束）时才结束流式，
+  // 避免跨对话 abort 竞态：旧流的 streamEnd 不应把新对话的 isStreaming 抹掉。
+  endStreaming: (conversationId?: string) =>
+    set((state) => {
+      if (conversationId && state.conversationId && conversationId !== state.conversationId) {
+        return state
+      }
+      return {
+        isStreaming: false,
+        streamingMessageId: null,
+        messages: state.messages.map((msg) =>
+          msg.isStreaming ? { ...msg, isStreaming: false } : msg
+        )
+      }
+    }),
 
   clearMessages: () => set({ messages: [], isStreaming: false, streamingMessageId: null }),
 

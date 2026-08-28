@@ -6,3 +6,5 @@ dist/
 *.tsbuildinfo
 .tmp-webview-test/
 .wopentest/
+__pycache__/
+*.pyc

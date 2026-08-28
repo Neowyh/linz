@@ -100,3 +100,30 @@ body {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.2; }
 }
+
+/* 动态等待标志：三点跳动，模型回答前提示用户正在工作 */
+@keyframes typing-bounce {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
+}
+
+.typing-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--color-primary, #1E6FCC);
+  animation: typing-bounce 1.2s ease-in-out infinite;
+}
+
+/* 悬浮卡片淡入 */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}

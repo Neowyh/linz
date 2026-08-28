@@ -5,6 +5,7 @@ import { is } from '@electron-toolkit/utils'
 import { createMainWindow } from './window'
 import { initDatabase, saveDatabase } from './database'
 import { seedBuiltinAgentSkills } from './database'
+import { getAppConfig } from './store/app-config'
 import { initKbDatabase, closeKbDatabase, migrateLegacyKb } from './database/kb'
 import { initTablesDatabase, closeTablesDatabase } from './database/tables'
 import { refreshSkillCache } from './agents/agent-skills.service'
@@ -108,12 +109,12 @@ app.whenReady().then(async () => {
   // 中文应用菜单（文件/编辑/视图/导航/窗口/帮助）
   setupAppMenu()
 
-  // 系统托盘：生产模式下关闭窗口隐藏到托盘，开发模式正常退出
+  // 系统托盘：生产模式下默认关闭窗口隐藏到托盘；设置 quitOnClose 后关闭窗口即退出进程
   if (!is.dev) {
     createTray(mainWindow)
 
     mainWindow.on('close', (e) => {
-      if (!isQuitting) {
+      if (!isQuitting && !getAppConfig().get('quitOnClose')) {
         e.preventDefault()
         mainWindow!.hide()
       }

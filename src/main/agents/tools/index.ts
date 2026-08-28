@@ -8,14 +8,17 @@ import { dbTablesTool, dbQueryTool } from './db-query.tool'
 import { plotChartTool } from './plot-chart.tool'
 import { dataAnalysisTool } from './data-analysis.tool'
 import { runSkillScriptTool } from './run-skill-script.tool'
+import { htmlToWordTool } from './html-to-word.tool'
+import { pythonTool } from './python.tool'
+import { browserTool } from './browser.tool'
 import { createDelegateTool } from './delegate.tool'
 import { createFilesystemTools } from './filesystem.tool'
 import { toolRegistry, type ToolInfo } from './registry'
 
 const DB_TOOLS: Tool[] = [dbTablesTool, dbQueryTool]
-const AERO_TOOLS: Tool[] = [aeroCalculatorTool, calculatorTool, knowledgeSearchTool, plotChartTool, dataAnalysisTool, runSkillScriptTool, ...DB_TOOLS]
-const SIM_TOOLS: Tool[] = [calculatorTool, knowledgeSearchTool, plotChartTool, dataAnalysisTool, runSkillScriptTool, ...DB_TOOLS]
-const CALC_TOOLS: Tool[] = [calculatorTool, knowledgeSearchTool, plotChartTool, dataAnalysisTool, runSkillScriptTool, ...DB_TOOLS]
+const AERO_TOOLS: Tool[] = [aeroCalculatorTool, calculatorTool, knowledgeSearchTool, plotChartTool, dataAnalysisTool, runSkillScriptTool, pythonTool, browserTool, ...DB_TOOLS]
+const SIM_TOOLS: Tool[] = [calculatorTool, knowledgeSearchTool, plotChartTool, dataAnalysisTool, runSkillScriptTool, pythonTool, browserTool, ...DB_TOOLS]
+const CALC_TOOLS: Tool[] = [calculatorTool, knowledgeSearchTool, plotChartTool, dataAnalysisTool, runSkillScriptTool, pythonTool, browserTool, ...DB_TOOLS]
 const KB_TOOLS: Tool[] = [knowledgeSearchTool, runSkillScriptTool, ...DB_TOOLS]
 
 const BUILTIN_TOOL_MAP: Record<string, Tool[]> = {
@@ -39,7 +42,10 @@ const BUILTIN_TOOL_INFOS: Array<{ name: string; description: string; tool: Tool 
   { name: 'db_query', description: '对表格数据库执行只读 SQL 查询', tool: dbQueryTool },
   { name: 'plot_chart', description: '绘制数据图表并直接显示在对话中（折线/柱状/散点/面积/饼图）', tool: plotChartTool },
   { name: 'data_analysis', description: '统计分析（描述统计/相关/回归拟合/t 检验/正态性/平滑）', tool: dataAnalysisTool },
-  { name: 'run_skill_script', description: '执行技能包附带脚本（.py/.js/.bat 等）', tool: runSkillScriptTool }
+  { name: 'run_skill_script', description: '执行技能包附带脚本（.py/.js/.bat 等）', tool: runSkillScriptTool },
+  { name: 'html_to_word', description: '将 HTML 文档转换为 Word 文档并可套用参考 Word 模板样式', tool: htmlToWordTool },
+  { name: 'python', description: '执行内嵌 Python 3.8.10 代码（numpy/matplotlib/scipy/pandas 可用）用于计算与可视化', tool: pythonTool },
+  { name: 'browser', description: '操作应用内嵌侧边栏浏览器（导航/点击/输入/滚动/截图/读取页面）', tool: browserTool }
 ]
 
 // 启动时把内置工具注册到 ToolRegistry（一次性，幂等）
@@ -62,6 +68,9 @@ export const AVAILABLE_TOOL_NAMES = [
   { name: 'plot_chart', description: '绘制数据图表并直接显示在对话中（折线/柱状/散点/面积/饼图）' },
   { name: 'data_analysis', description: '统计分析（描述统计/相关/回归拟合/t 检验/正态性/平滑）' },
   { name: 'run_skill_script', description: '执行技能包附带脚本（.py/.js/.bat 等）' },
+  { name: 'html_to_word', description: '将 HTML 文档转换为 Word 文档并可套用参考 Word 模板样式' },
+  { name: 'python', description: '执行内嵌 Python 3.8.10 代码（numpy/matplotlib/scipy/pandas 可用）用于计算与可视化' },
+  { name: 'browser', description: '操作应用内嵌侧边栏浏览器（导航/点击/输入/滚动/截图/读取页面）' },
   { name: 'delegate_to_agent', description: '委派子任务给其他专业 Agent' }
 ]
 

@@ -15,6 +15,10 @@ import { registerMcpIPC } from './mcp.ipc'
 import { registerTerminalIPC } from './terminal.ipc'
 import { registerAgentSkillsIPC } from './agent-skills.ipc'
 import { registerFileWorkspaceIPC } from './file-workspace.ipc'
+import { registerFileBrowserIPC } from './file-browser.ipc'
+import { registerApprovalIPC } from './approval.ipc'
+import { registerStepIPC } from './step.ipc'
+import { registerBrowserIPC } from './browser.ipc'
 
 export function registerAllIPC(mainWindow: BrowserWindow): void {
   registerChatIPC(mainWindow)
@@ -33,4 +37,8 @@ export function registerAllIPC(mainWindow: BrowserWindow): void {
   registerTerminalIPC(mainWindow)
   registerAgentSkillsIPC(mainWindow)
   registerFileWorkspaceIPC(mainWindow)
+  registerFileBrowserIPC()
+  registerApprovalIPC()
+  registerStepIPC()
+  registerBrowserIPC()
 }

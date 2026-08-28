@@ -54,7 +54,15 @@ function parseSkillMarkdown(raw: string, fallbackName: string): { name: string; 
 
 const EN_STOPWORDS = new Set([
   'the', 'and', 'for', 'with', 'this', 'that', 'when', 'how', 'use', 'used', 'using',
-  'you', 'your', 'are', 'can', 'will', 'from', 'into', 'skill', 'agent'
+  'you', 'your', 'are', 'can', 'will', 'from', 'into', 'skill', 'agent',
+  // 常见虚词/介词/代词（单字母 token 不会被正则捕获，无需列 a/i）
+  'or', 'an', 'of', 'to', 'in', 'on', 'by', 'as', 'at', 'be', 'is', 'it', 'its',
+  'if', 'so', 'then', 'than', 'do', 'go', 'we', 'us', 'all', 'any', 'each', 'some',
+  'more', 'most', 'other', 'such', 'only', 'new', 'own', 'same', 'both', 'via', 'may',
+  // 描述动作的低信号动词（常见于技能说明，但几乎不是用户查询词）
+  'build', 'inspect', 'reproduce', 'create', 'make', 'made', 'write', 'read', 'run',
+  'open', 'close', 'save', 'load', 'start', 'stop', 'get', 'set', 'add', 'remove',
+  'check', 'ensure', 'verify', 'work', 'look', 'need', 'want', 'find', 'show'
 ])
 
 // 从 name/description 提取触发关键词候选，导入预览时由用户确认/编辑
@@ -207,7 +215,8 @@ function candidateFromMarkdown(
   return makeCandidate({ sourcePath, name, description, content, warnings, existingNames, packageSource, scriptNames })
 }
 
-// 解析单个目录：根目录有 SKILL.md → 单技能；否则扫描一层子目录（技能仓库形态）
+// 解析单个目录：根目录有 SKILL.md → 单技能；否则递归扫描所有子目录，
+// 凡含 SKILL.md 的目录都作为一个技能候选（支持 Codex 插件 skills/<plugin>/skills/<skill>/SKILL.md 嵌套）
 function collectFromDirectory(dir: string, existingNames: Set<string>): SkillCandidate[] {
   const rootSkill = findSkillMd(dir)
   if (rootSkill) {
@@ -221,26 +230,33 @@ function collectFromDirectory(dir: string, existingNames: Set<string>): SkillCan
     )]
   }
   const candidates: SkillCandidate[] = []
-  for (const sub of fs.readdirSync(dir).sort()) {
-    const subDir = path.join(dir, sub)
-    try {
-      if (!fs.statSync(subDir).isDirectory()) continue
-    } catch {
-      continue
+  const walk = (d: string): void => {
+    for (const sub of fs.readdirSync(d).sort()) {
+      if (sub.startsWith('.')) continue  // 跳过 .codex-plugin / .git 等隐藏目录
+      const subDir = path.join(d, sub)
+      try {
+        if (!fs.statSync(subDir).isDirectory()) continue
+      } catch {
+        continue
+      }
+      const skillFile = findSkillMd(subDir)
+      if (skillFile) {
+        try {
+          candidates.push(candidateFromMarkdown(
+            fs.readFileSync(skillFile, 'utf-8'),
+            sub,
+            skillFile,
+            dirResources(subDir),
+            existingNames,
+            { kind: 'dir', dir: subDir }
+          ))
+        } catch { /* 单个技能读取失败跳过 */ }
+      } else {
+        walk(subDir)  // 递归下钻
+      }
     }
-    const skillFile = findSkillMd(subDir)
-    if (!skillFile) continue
-    try {
-      candidates.push(candidateFromMarkdown(
-        fs.readFileSync(skillFile, 'utf-8'),
-        sub,
-        skillFile,
-        dirResources(subDir),
-        existingNames,
-        { kind: 'dir', dir: subDir }
-      ))
-    } catch { /* 单个技能读取失败跳过 */ }
   }
+  walk(dir)
   return candidates
 }
 

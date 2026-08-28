@@ -9,6 +9,7 @@ import {
   getWorkspaceKbPath,
   getWorkspaceTablesPath
 } from '../workspace'
+import { getFileWorkspacePath, setFileWorkspacePath } from '../store/app-config'
 import { switchDatabase } from '../database'
 import { switchKbDatabase } from '../database/kb'
 import { switchTablesDatabase } from '../database/tables'
@@ -75,5 +76,16 @@ export function registerWorkspaceIPC(mainWindow: BrowserWindow): void {
   ipcMain.handle('workspace:rename', async (_event, id: string, name: string) => {
     const success = renameWorkspace(id, name)
     return { success }
+  })
+
+  // 当前工作区绑定的文件工作空间目录（文件管理器 + Agent 文件工具共用）
+  ipcMain.handle('workspace:getFolder', () => {
+    return { folder: getFileWorkspacePath() }
+  })
+
+  ipcMain.handle('workspace:setFolder', (_event, folder: string) => {
+    if (typeof folder !== 'string') return { success: false, error: '目录参数无效' }
+    setFileWorkspacePath(folder)
+    return { success: true }
   })
 }

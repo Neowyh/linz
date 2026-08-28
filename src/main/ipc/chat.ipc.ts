@@ -1,11 +1,13 @@
 import { ipcMain, BrowserWindow } from 'electron'
 import { getAgentEngine } from '../agents'
 import { getMessagesRepo, getConversationsRepo } from '../database'
-import { isOverBudget, getBudgetPercentage, addTokenUsage, getAppConfig, getCurrentMonthUsage } from '../store/app-config'
+import { isOverBudget, getBudgetPercentage, addTokenUsage, getAppConfig, getCurrentMonthUsage, getFileWorkspacePath } from '../store/app-config'
 import { estimateTokens } from '../llm'
 import { v4 as uuidv4 } from 'uuid'
 import { parseFile, formatAttachmentContent, type ParsedAttachment } from '../parsers'
-import type { ToolCallData } from '../agents/base.agent'
+import type { ToolCallData, StepProgressData, PanelCommandPayload } from '../agents/base.agent'
+import { StepMarkerStream, PanelMarkerStream } from '../agents/base.agent'
+import type { SkillTriggerInfo } from '../agents/agent-skills.service'
 
 let mainWindowRef: BrowserWindow | null = null
 let currentAbortController: AbortController | null = null
@@ -73,28 +75,63 @@ export function registerChatIPC(mainWindow: BrowserWindow): void {
       if (!engine) {
         win?.webContents.send('chat:streamError', {
           conversationId,
-          error: 'Agent 引擎未初始化，请先配置 API Key'
+          error: 'Agent 引擎未初始化，请先配置 DeepSeek API Key 或启用 Ollama 离线模式'
         })
         return
       }
 
-      const fileWorkspacePath = (getAppConfig().get('fileWorkspacePath') as string) || ''
+      const fileWorkspacePath = getFileWorkspacePath()
       const stream = engine.handleUserMessage(conversationId, content, myController.signal, selectedAgent, fileWorkspacePath, dispatchMode, Array.isArray(skillIds) ? skillIds : undefined)
 
       // 按 messageId 聚合流式内容，用于最终持久化
-      // 工具调用结构化累积，不再拼进 content（否则重载会话时工具结果以纯文本展开显示）
-      const agentMessages = new Map<string, { agentType: string; content: string; toolCalls: ToolCallData[] }>()
+      // 工具调用/技能触发结构化累积，不再拼进 content（否则重载会话时以纯文本展开显示）
+      const agentMessages = new Map<string, { agentType: string; content: string; toolCalls: ToolCallData[]; skillTriggers: SkillTriggerInfo[]; steps: string[]; doneCount: number }>()
+      // 每个 message 一个跨 chunk 的步骤标记解析器
+      const stepStreams = new Map<string, StepMarkerStream>()
+      // 每个 message 一个跨 chunk 的面板指令标记解析器（⟪PANEL⟫...⟫/PANEL⟫）
+      const panelStreams = new Map<string, PanelMarkerStream>()
 
       for await (const chunk of stream) {
         if (myController.signal.aborted) break
+
+        // 跨 chunk 剥离标记：先剥离步骤标记，再剥离面板标记，拿到干净文本
+        let cleanText = chunk.content
+        let stepProgress: StepProgressData | undefined
+        let panelActions: PanelCommandPayload[] | undefined
+        if (chunk.content) {
+          let ss = stepStreams.get(chunk.messageId)
+          if (!ss) {
+            ss = new StepMarkerStream()
+            stepStreams.set(chunk.messageId, ss)
+          }
+          cleanText = ss.push(chunk.content)
+          if (ss.plan.length > 0) {
+            stepProgress = { steps: [...ss.plan], doneIndex: ss.doneCount - 1 }
+          }
+          // 再过面板标记剥离器（此时 cleanText 已无 STEP 标记）
+          let ps = panelStreams.get(chunk.messageId)
+          if (!ps) {
+            ps = new PanelMarkerStream()
+            panelStreams.set(chunk.messageId, ps)
+          }
+          cleanText = ps.push(cleanText)
+          if (ps.commands.length > 0) {
+            // 携带 sourceMessageId 供渲染端双向高亮回溯
+            panelActions = ps.commands.map((c) => ({ ...c, sourceMessageId: chunk.messageId }))
+            ps.commands = []  // 已取走，避免重复转发
+          }
+        }
 
         win?.webContents.send('chat:streamChunk', {
           conversationId,
           messageId: chunk.messageId,
           agentType: chunk.agentType,
-          chunk: chunk.content,
+          chunk: cleanText,
           toolCall: chunk.toolCall,
-          thinking: chunk.thinking
+          thinking: chunk.thinking,
+          skillTriggers: chunk.skillTriggers,
+          stepProgress,
+          panelActions
         })
 
         if (chunk.statusChange) {
@@ -108,13 +145,26 @@ export function registerChatIPC(mainWindow: BrowserWindow): void {
 
         // 聚合内容（跳过执行中占位；完成的工具调用按 toolCallId 去重更新）
         let msgData = agentMessages.get(chunk.messageId)
-        if (!msgData && (chunk.content || chunk.toolCall)) {
-          msgData = { agentType: chunk.agentType, content: '', toolCalls: [] }
+        if (!msgData && (chunk.content || chunk.toolCall || chunk.skillTriggers)) {
+          msgData = { agentType: chunk.agentType, content: '', toolCalls: [], skillTriggers: [], steps: [], doneCount: 0 }
           agentMessages.set(chunk.messageId, msgData)
         }
         if (msgData) {
-          if (chunk.content) {
-            msgData.content += chunk.content
+          // 同步解析器里的步骤进度到聚合数据（供持久化/进度跟踪）
+          const ss = stepStreams.get(chunk.messageId)
+          if (ss) {
+            msgData.steps = [...ss.plan]
+            msgData.doneCount = ss.doneCount
+          }
+          if (cleanText) {
+            msgData.content += cleanText
+          }
+          if (chunk.skillTriggers) {
+            for (const t of chunk.skillTriggers) {
+              if (!msgData.skillTriggers.some((e) => e.skillId === t.skillId)) {
+                msgData.skillTriggers.push(t)
+              }
+            }
           }
           if (chunk.toolCall && chunk.toolCall.isComplete !== false) {
             const tc = chunk.toolCall
@@ -129,15 +179,28 @@ export function registerChatIPC(mainWindow: BrowserWindow): void {
 
         // 流结束时持久化完整的 Agent 消息
         if (chunk.isComplete) {
+          // 末尾遗留的缓冲：未闭合的步骤/面板标记丢弃，普通文本补入正文
+          const ss = stepStreams.get(chunk.messageId)
+          const flushTail = ss ? ss.flush() : ''
+          if (flushTail) {
+            const m = agentMessages.get(chunk.messageId)
+            if (m) m.content += flushTail
+          }
+          const ps = panelStreams.get(chunk.messageId)
+          const flushPanelTail = ps ? ps.flush() : ''
+          if (flushPanelTail) {
+            const m = agentMessages.get(chunk.messageId)
+            if (m) m.content += flushPanelTail
+          }
           const msgData = agentMessages.get(chunk.messageId)
-          if (msgData && (msgData.content || msgData.toolCalls.length > 0)) {
+          if (msgData && (msgData.content || msgData.toolCalls.length > 0 || msgData.skillTriggers.length > 0)) {
             // strip <<<AGENT_MSG>>>...<<\/AGENT_MSG>>> 块，避免污染历史记录
             // （流式输出过程中对用户可见，但重载后不可见）
             const cleanContent = msgData.content.replace(
               /<<<AGENT_MSG>>>\s*[\s\S]*?<<<\/AGENT_MSG>>>/g,
               ''
             ).trim()
-            if (cleanContent || msgData.toolCalls.length > 0) {
+            if (cleanContent || msgData.toolCalls.length > 0 || msgData.skillTriggers.length > 0) {
               const outputTokens = Math.ceil(cleanContent.length / 4)
               messagesRepo.insert({
                 id: chunk.messageId,
@@ -146,7 +209,8 @@ export function registerChatIPC(mainWindow: BrowserWindow): void {
                 agent_type: msgData.agentType,
                 content: cleanContent,
                 tokens: outputTokens,
-                tool_calls: msgData.toolCalls.length > 0 ? JSON.stringify(msgData.toolCalls) : null
+                tool_calls: msgData.toolCalls.length > 0 ? JSON.stringify(msgData.toolCalls) : null,
+                skill_triggers: msgData.skillTriggers.length > 0 ? JSON.stringify(msgData.skillTriggers) : null
               })
               // 记录输出 token 使用量
               addTokenUsage(0, outputTokens)

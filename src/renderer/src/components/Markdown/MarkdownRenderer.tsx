@@ -6,6 +6,7 @@ import rehypeHighlight from 'rehype-highlight'
 import { Image } from 'antd'
 import 'katex/dist/katex.min.css'
 import 'highlight.js/styles/github-dark.css'
+import { usePanelCommandStore } from '../../stores/panelCommandStore'
 
 interface MarkdownRendererProps {
   content: string
@@ -83,6 +84,32 @@ export default function MarkdownRenderer({ content }: MarkdownRendererProps): JS
         ),
         hr: () => <hr className="my-4 border-gray-200" />,
         strong: ({ children }) => <strong className="font-bold text-gray-900">{children}</strong>,
+        // 对话消息里的 http(s) 链接：点击不跳外部浏览器，而是 dispatch 一条 browser 命令，
+        // 由 panelCommandStore 自动打开右侧浏览器面板并导航到该 URL。
+        a: ({ href, children }) => {
+          const isHttp = typeof href === 'string' && /^https?:\/\//i.test(href)
+          if (!isHttp) {
+            // 非 http(s) 协议保持默认（不拦截）
+            return <a href={href} target="_blank" rel="noreferrer">{children}</a>
+          }
+          return (
+            <a
+              href={href}
+              onClick={(e) => {
+                e.preventDefault()
+                usePanelCommandStore.getState().dispatch({
+                  panelType: 'browser',
+                  action: 'navigate',
+                  payload: { url: href }
+                })
+              }}
+              className="text-primary underline hover:opacity-80 cursor-pointer"
+              title={`在右侧浏览器面板打开：${href}`}
+            >
+              {children}
+            </a>
+          )
+        },
         img: ({ src, alt }) => (
           <Image
             src={src}

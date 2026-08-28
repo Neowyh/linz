@@ -9,7 +9,9 @@ export type MenuAction =
   | 'search-focus'
   | 'theme'
   | 'right-panel-toggle'
+  | 'left-panel-toggle'
   | 'right-panel-tab'
+  | 'open-panel'
   | 'navigate'
 
 export interface MenuActionPayload {
@@ -115,7 +117,7 @@ export function setupAppMenu(): void {
           ]
         },
         {
-          label: '右侧面板',
+          label: '工作区面板',
           submenu: [
             {
               label: '显示 / 隐藏面板',
@@ -124,16 +126,39 @@ export function setupAppMenu(): void {
             },
             { type: 'separator' },
             {
-              label: '打开首页面板',
-              click: () => sendMenuAction(getMainWindow(), 'right-panel-tab', 'home')
-            },
-            {
               label: '打开浏览器面板',
               click: () => sendMenuAction(getMainWindow(), 'right-panel-tab', 'browser')
             },
             {
               label: '打开终端面板',
               click: () => sendMenuAction(getMainWindow(), 'right-panel-tab', 'terminal')
+            },
+            {
+              label: '打开文件面板',
+              click: () => sendMenuAction(getMainWindow(), 'right-panel-tab', 'files')
+            },
+            { type: 'separator' },
+            {
+              label: '打开知识库面板',
+              click: () => sendMenuAction(getMainWindow(), 'open-panel', 'kb')
+            },
+            {
+              label: '打开三维模型面板',
+              click: () => sendMenuAction(getMainWindow(), 'open-panel', 'viewer3d')
+            },
+            {
+              label: '打开仿真结果面板',
+              click: () => sendMenuAction(getMainWindow(), 'open-panel', 'field')
+            }
+          ]
+        },
+        {
+          label: '左侧面板',
+          submenu: [
+            {
+              label: '显示 / 隐藏面板',
+              accelerator: 'CmdOrCtrl+Shift+B',
+              click: () => sendMenuAction(getMainWindow(), 'left-panel-toggle')
             }
           ]
         },

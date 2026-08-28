@@ -13,6 +13,32 @@ export interface StreamChunkData {
   messageId: string
   agentType: string
   chunk: string
+  toolCall?: unknown
+  thinking?: string
+  skillTriggers?: SkillTriggerInfo[]
+  stepProgress?: StepProgressData
+  /** 面板指令（对话→面板联动）：由 Agent 的 ⟪PANEL⟫ 标记解析而来，渲染端 panelCommandStore 路由 */
+  panelActions?: PanelCommandPayload[]
+}
+
+/** 面板指令 payload：与 src/main/agents/base.agent.ts 的 PanelCommandPayload 保持一致 */
+export interface PanelCommandPayload {
+  panelType: string
+  action: string
+  payload: Record<string, unknown>
+  sourceMessageId?: string
+  instanceId?: string
+}
+
+export interface StepProgressData {
+  steps: string[]
+  doneIndex: number
+}
+
+export interface SkillTriggerInfo {
+  skillId: string
+  skillName: string
+  source: 'forced' | 'matched'
 }
 
 export interface StreamEndData {
@@ -48,6 +74,24 @@ export interface ConversationSummary {
   status: string
 }
 
+// 文件管理器（右侧面板"文件"标签）类型
+export interface FileEntry {
+  name: string
+  /** 相对工作空间根目录的路径，统一用 '/' 分隔；根目录为 '' */
+  relPath: string
+  type: 'dir' | 'file'
+  size: number
+  mtime: number
+}
+
+export type FilePreviewData =
+  | { kind: 'text'; content: string; language?: string; truncated?: boolean }
+  | { kind: 'html'; html: string; truncated?: boolean }
+  | { kind: 'pdf'; url: string; text: string }
+  | { kind: 'image'; dataUrl: string }
+  | { kind: 'binary'; message: string }
+  | { error: string }
+
 export interface ConversationDetail extends ConversationSummary {
   messages: MessageData[]
 }
@@ -60,6 +104,8 @@ export interface MessageData {
   content: string
   tokens: number
   created_at: string
+  tool_calls?: string | null
+  skill_triggers?: string | null
 }
 
 export interface AutoTaskNotification {
@@ -155,6 +201,41 @@ export interface KbImportSummary {
   skipped: number
   error: number
   results: KbImportFileResult[]
+}
+
+export interface GraphNode {
+  id: string
+  kind: 'document' | 'entity'
+  label: string
+  category?: string
+  tags?: string[]
+  chunkCount?: number
+  entityType?: string
+  docIds?: string[]
+}
+
+export interface GraphEdge {
+  id: string
+  source: string
+  target: string
+  kind: 'similar' | 'relation' | 'mentions'
+  weight?: number
+  label?: string
+}
+
+export interface GraphPayload {
+  nodes: GraphNode[]
+  edges: GraphEdge[]
+  truncated: boolean
+  entityCount: number
+}
+
+export interface GraphEnrichProgress {
+  total: number
+  done: number
+  fileName: string
+  status: 'extracting' | 'done' | 'skipped' | 'error'
+  error?: string
 }
 
 export interface TemplateData {
@@ -327,6 +408,12 @@ export interface AeromindAPI {
     semanticSearch(query: string, options?: { domain?: string; limit?: number; tags?: string[] }): Promise<Array<{ content: string; document_id: string; file_name: string; score: number }>>
     embeddingStatus(): Promise<boolean>
     generateEmbeddings(): Promise<{ success: boolean; embedded?: number; error?: string }>
+    graphBuild(options?: { threshold?: number; includeEntities?: boolean }): Promise<GraphPayload>
+    graphDocChunks(docId: string, limit?: number): Promise<Array<{ content: string; chunk_index: number }>>
+    graphLlmEnrich(docIds: string[]): Promise<{ done: number; skipped: number; failed: number; entityCount: number }>
+    graphClearEnrichment(docIds?: string[]): Promise<{ success: boolean }>
+    graphAsk(question: string, docIds: string[]): Promise<{ answer: string; sources: Array<{ file_name: string; snippet: string }> }>
+    onGraphEnrichProgress(callback: (data: GraphEnrichProgress) => void): () => void
   }
   tables: {
     list(): Promise<TableDataset[]>
@@ -373,10 +460,28 @@ export interface AeromindAPI {
     create(name: string): Promise<WorkspaceData>
     delete(id: string): Promise<{ success: boolean; error?: string }>
     rename(id: string, name: string): Promise<{ success: boolean }>
+    getFolder(): Promise<{ folder: string }>
+    setFolder(folder: string): Promise<{ success: boolean; error?: string }>
     onChanged(callback: (id: string) => void): () => void
+  }
+  files: {
+    getRoot(): Promise<{ root: string | null }>
+    list(relPath?: string): Promise<{ entries: FileEntry[] } | { error: string }>
+    read(relPath: string): Promise<FilePreviewData>
+    readBinary(relPath: string): Promise<{ data: string; size: number; error?: never } | { error: string }>
+    openExternal(relPath: string): Promise<{ success: boolean; error?: string }>
+    reveal(relPath: string): Promise<{ success: boolean; error?: string }>
+  }
+  step: {
+    readMesh(relPath: string): Promise<
+      | { success: true; positions: number[]; indices: number[]; meshCount: number; vertexCount: number }
+      | { success: false; error: string }
+    >
   }
   browser: {
     onOpenInNewTab(callback: (data: { url: string; guestId: number }) => void): () => void
+    onOpenPanel(callback: () => void): () => void
+    reportActiveTab(guestId: number | null): void
   }
   terminal: {
     spawn(opts?: { cwd?: string }): Promise<{ sessionId: string }>
@@ -400,6 +505,35 @@ export interface AeromindAPI {
     detectPython(): Promise<{ path: string | null }>
     detectCatiaServer(): Promise<{ path: string | null; valid: boolean }>
     detectAbaqusServer(): Promise<{ path: string | null; valid: boolean }>
+  }
+  approval: {
+    onRequest(callback: (data: {
+      requestId: string
+      messageId?: string
+      toolName: string
+      risk: string
+      argsSummary: string
+      agentType: string
+      agentName: string
+      agentColor: string
+      timestamp: number
+    }) => void): () => void
+    respond(requestId: string, decision: 'approve' | 'deny', remember: boolean): Promise<boolean>
+  }
+  security: {
+    listRisks(): Promise<Record<string, string>>
+    getMode(): Promise<'default' | 'full'>
+    setMode(mode: 'default' | 'full'): Promise<{ success: boolean; error?: string }>
+    listPolicies(): Promise<Record<string, 'allow' | 'ask' | 'deny'>>
+    setPolicy(toolName: string, action: 'allow' | 'ask' | 'deny' | null): Promise<{ success: boolean; error?: string }>
+    listRemembered(): Promise<Array<{ fingerprint: string; toolName: string; argsSummary: string; ts: number }>>
+    forgetRemembered(fingerprint: string): Promise<{ success: boolean; error?: string }>
+    listAudit(limit?: number): Promise<any[]>
+    clearAudit(): Promise<{ success: boolean }>
+    listProtected(): Promise<string[]>
+    addProtected(p: string): Promise<{ success: boolean; error?: string }>
+    removeProtected(p: string): Promise<{ success: boolean }>
+    pickProtectedDirectory(): Promise<string | null>
   }
   menu: {
     onAction(callback: (data: { action: string; payload?: unknown }) => void): () => void

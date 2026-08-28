@@ -4,8 +4,6 @@ import { GENERAL_SYSTEM_PROMPT } from './prompts/general.system'
 import { BaseAgent } from './base.agent'
 import type { AgentConfig, StreamChunk, AgentContext, AgentStatusData, AgentOverrideConfig } from './base.agent'
 import { getToolsForAgent } from './tools'
-import { ensurePi } from '../pi'
-import { runWithPi } from '../pi/agent-runner'
 
 export class GeneralAgent extends BaseAgent {
   readonly config: AgentConfig
@@ -53,29 +51,10 @@ export class GeneralAgent extends BaseAgent {
       }
       yield { messageId, agentType: 'general', content: '', statusChange: workingStatus, isComplete: false }
 
-      // 按 engine 分流：先尝试加载 Pi SDK，加载失败才回退 DeepSeek
-      let usePi = false
-      if (this.config.engine === 'pi') {
-        try {
-          await ensurePi()
-          usePi = true
-        } catch (err: any) {
-          console.warn('[GeneralAgent] Pi SDK load failed, falling back to DeepSeek:', err?.message || err)
-        }
-      }
-      if (usePi) {
-        yield* runWithPi(context, {
-          agentType: 'general',
-          agentName: this.config.name,
-          agentColor: this.config.color,
-          systemPrompt: this.getEffectiveSystemPrompt(task, context),
-          task: this.prepareTaskWithContext(task),
-          ragContext: context.ragContext,
-          customTools: this.getAvailableTools(context)
-        })
-      } else {
-        yield* this.streamLLM(task, context, messageId)
-      }
+      // 统一走 BaseAgent.streamLLM：自动按 config.engine 分流 Pi/DeepSeek，
+      // 且会预发 skillTriggers chunk（强制技能 + 关键词匹配）。
+      // 与 aero/structural 等其他内置 agent 实现对齐。
+      yield* this.streamLLM(task, context, messageId)
 
       this.stateMachine.transition('completed')
       yield {

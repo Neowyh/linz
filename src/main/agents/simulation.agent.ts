@@ -42,6 +42,9 @@ export class SimulationAgent extends BaseAgent {
       engine: overrides?.engine ?? 'deepseek'
     }
     this.systemPrompt = overrides?.systemPrompt ?? SIMULATION_SYSTEM_PROMPT
+    // simulation Agent 会产出仿真结果文件，注入 PANEL_ACTION_PROTOCOL 让它输出 ⟪PANEL⟫ 标记
+    // 自动驱动右侧 field(仿真结果)面板打开并加载，无需用户手敲路径
+    this.emitsPanelCommands = true
     this.setStateMachine(this.stateMachine)
   }
 

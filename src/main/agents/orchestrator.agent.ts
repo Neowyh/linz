@@ -7,7 +7,7 @@ import { agentMessageBus } from './agent-message-bus'
 import { ORCHESTRATOR_SYSTEM_PROMPT } from './prompts/orchestrator.system'
 import { searchKnowledgeBase, formatRagContext, hybridSearch } from '../ipc/knowledge.ipc'
 import { getCustomKeywords, getCustomSubtaskPrefix, getBuiltinAgentKeywords, getBuiltinSubtaskPrefix } from './custom-agents.service'
-import { getEffectiveSkillsForAgent, formatSkillsForPrompt, getSkillsByIds } from './agent-skills.service'
+import { formatSkillsForPrompt, resolveEffectiveSkills } from './agent-skills.service'
 import type { IAgent, AgentConfig, AgentState, StreamChunk, AgentContext, AgentStatusData, AgentType, AgentMessage, AgentOverrideConfig } from './base.agent'
 import { buildChatHistory } from './base.agent'
 import { HumanMessage, AIMessage } from '@langchain/core/messages'
@@ -289,18 +289,18 @@ export class OrchestratorAgent implements IAgent {
       // @mention 未命中时剥离前缀后也会落到这里，按当前 dispatchMode 处理
       const neededAgents: AgentType[] = context.dispatchMode === 'collaborative' ? identifyAgents(task) : []
 
-      // 动态构建系统提示词：基础提示词 + 当前可用 Agent 列表
+      // 动态构建系统提示词：基础提示词 + 当前可用 Agent 列表 + 生效技能（强制注入优先）
       const availableAgents = agentRegistry.getAllStates()
         .filter(s => s.agentType !== 'orchestrator')
         .map(s => `- **${s.name}** (${s.agentType})`)
         .join('\n')
+      const { skills: orchestratorSkills, triggers: orchestratorSkillTriggers } = resolveEffectiveSkills('orchestrator', task, context.forcedSkillIds)
+      if (orchestratorSkillTriggers.length > 0) {
+        yield { messageId, agentType: 'orchestrator', content: '', skillTriggers: orchestratorSkillTriggers, isComplete: false }
+      }
       const dynamicSystemPrompt = (() => {
         const base = `${this.systemPrompt}\n\n## 当前可调度的专业 Agent\n${availableAgents || '- （暂无可用 Agent）'}`
-        const forced = context.forcedSkillIds?.length ? getSkillsByIds(context.forcedSkillIds) : []
-        const matched = getEffectiveSkillsForAgent('orchestrator', task)
-        const forcedIds = new Set(forced.map((s) => s.id))
-        const skills = [...forced, ...matched.filter((s) => !forcedIds.has(s.id))]
-        return skills.length > 0 ? `${base}\n\n${formatSkillsForPrompt(skills)}` : base
+        return orchestratorSkills.length > 0 ? `${base}\n\n${formatSkillsForPrompt(orchestratorSkills)}` : base
       })()
       // RAG: 检索知识库相关片段（优先使用混合检索）
       let ragContext: string | undefined
@@ -325,6 +325,13 @@ export class OrchestratorAgent implements IAgent {
       this.stateMachine.transition('working')
       yield { messageId, agentType: 'orchestrator', content: '', statusChange: { agentType: 'orchestrator', name: this.config.name, color: this.config.color, state: 'working', currentTask: neededAgents.length > 0 ? `调度${neededAgents.length}个专业Agent` : '直接回答' }, isComplete: false }
 
+      // ⚠️ 已知引擎割裂（Phase A 共存模式）：协同模式下 orchestrator 自身走 DeepSeek/LangChain
+      // （createChatModel + streamChat），而被调度的子 agent 走 Pi 引擎（runWithPi）。
+      // 当 DeepSeek 不可用、Ollama 启用时，两条路径各自独立 fallback 到 Ollama：
+      //   orchestrator → LangChain createOllamaModel
+      //   子 agent → Pi getOllamaModelContext
+      // 二者可能落到不同 Ollama 模型实例或一个成功一个失败，语义割裂。
+      // Phase B 统一切到 Pi 引擎后此割裂消失，届时移除本注释与 DeepSeek 路径。
       const llm = createChatModel()
 
       // 构建对话历史（保留 agent_type 元数据）

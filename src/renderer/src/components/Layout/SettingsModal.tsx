@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Modal, Input, Button, message, Select, Space, Switch, Progress, InputNumber, Radio, Tag } from 'antd'
 import { KeyOutlined, CheckCircleOutlined, BulbOutlined, ApiOutlined, LoadingOutlined } from '@ant-design/icons'
 import { useSettingsStore } from '../../stores/settingsStore'
+import SecuritySettingsPanel from './SecuritySettingsPanel'
 
 const PROVIDER_PRESETS: Record<string, { label: string; baseURL: string; modelName: string }> = {
   deepseek: { label: 'DeepSeek', baseURL: 'https://api.deepseek.com', modelName: 'deepseek-chat' },
@@ -44,6 +45,15 @@ export default function SettingsModal(): JSX.Element {
   // 技能脚本执行开关（立即生效，不随"保存"按钮）
   const [skillScriptEnabled, setSkillScriptEnabled] = useState(false)
 
+  // 关闭行为开关：生产模式下关闭窗口时退出进程（立即生效，不随"保存"按钮）
+  const [quitOnClose, setQuitOnClose] = useState(true)
+
+  const handleQuitOnCloseToggle = async (enabled: boolean): Promise<void> => {
+    setQuitOnClose(enabled)
+    await window.aeromind.settings.set('quitOnClose', enabled)
+    message.success(enabled ? '已开启：点击关闭按钮将直接退出程序' : '已关闭：点击关闭按钮将最小化到系统托盘')
+  }
+
   const handleSkillScriptToggle = async (enabled: boolean): Promise<void> => {
     setSkillScriptEnabled(enabled)
     await window.aeromind.settings.set('skillScriptEnabled', enabled)
@@ -57,16 +67,18 @@ export default function SettingsModal(): JSX.Element {
   // 同步 store 状态到本地
   useEffect(() => {
     const loadValues = async (): Promise<void> => {
-      const [savedBaseURL, savedModel, savedFallback, budgetData, savedSkillScript] = await Promise.all([
+      const [savedBaseURL, savedModel, savedFallback, budgetData, savedSkillScript, savedQuitOnClose] = await Promise.all([
         window.aeromind.settings.get('baseURL'),
         window.aeromind.settings.get('modelName'),
         window.aeromind.settings.get('fallbackModel'),
         window.aeromind.token.getBudget(),
-        window.aeromind.settings.get('skillScriptEnabled')
+        window.aeromind.settings.get('skillScriptEnabled'),
+        window.aeromind.settings.get('quitOnClose')
       ])
       setBaseURL(savedBaseURL || PROVIDER_PRESETS[provider]?.baseURL || '')
       setModelName(savedModel || PROVIDER_PRESETS[provider]?.modelName || '')
       setSkillScriptEnabled(Boolean(savedSkillScript))
+      setQuitOnClose(savedQuitOnClose === undefined ? true : Boolean(savedQuitOnClose))
       if (budgetData) {
         setBudgetEnabled(budgetData.enabled)
         setMonthlyLimit(budgetData.monthlyLimit)
@@ -361,12 +373,29 @@ export default function SettingsModal(): JSX.Element {
         </div>
 
         <div>
+          <h3 className="text-sm font-medium text-gray-900 mb-3">关闭行为</h3>
+          <div className="flex items-center justify-between">
+            <div className="pr-4">
+              <label className="text-xs text-gray-600">关闭窗口时退出程序</label>
+              <p className="text-[11px] text-gray-400 mt-0.5">
+                开启后点击窗口关闭按钮将直接退出进程；关闭后最小化到系统托盘常驻。
+              </p>
+            </div>
+            <Switch
+              checked={quitOnClose}
+              onChange={handleQuitOnCloseToggle}
+              size="small"
+            />
+          </div>
+        </div>
+
+        <div>
           <h3 className="text-sm font-medium text-gray-900 mb-3">高级</h3>
           <div className="flex items-center justify-between">
             <div className="pr-4">
               <label className="text-xs text-gray-600">允许执行技能脚本</label>
               <p className="text-[11px] text-gray-400 mt-0.5">
-                开启后 Agent 可执行导入技能包中 scripts/ 目录的脚本（.py/.js/.bat 等）。每个技能首次执行时会弹窗显示完整命令并请求确认，信任后不再询问。
+                开启后 Agent 可执行导入技能包中 scripts/ 目录的脚本（.py/.js/.bat 等）。执行前会弹出聊天内安全确认卡，可"允许一次 / 始终允许 / 拒绝"。
               </p>
             </div>
             <Switch
@@ -375,6 +404,11 @@ export default function SettingsModal(): JSX.Element {
               size="small"
             />
           </div>
+        </div>
+
+        <div>
+          <h3 className="text-sm font-medium text-gray-900 mb-3">🔒 安全与权限</h3>
+          <SecuritySettingsPanel />
         </div>
 
         <div className="flex justify-end pt-2 border-t border-gray-200">

@@ -4,10 +4,12 @@ import { promisify } from 'util'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { dialog, BrowserWindow } from 'electron'
 import { findSkillByNameOrId, listSkillScripts } from '../agent-skills.service'
 import { getAppConfig } from '../../store/app-config'
-import { detectPythonPath } from '../../mcp/templates'
+import { resolvePythonPath } from './python.tool'
+import { buildSafeEnv } from '../../security/env-sandbox'
+import { checkPathAllowed } from '../../security/file-protection'
+import { findOnPath } from '../../fs/path-guard'
 
 const execFileAsync = promisify(execFile)
 
@@ -30,16 +32,6 @@ function parseArgs(raw?: string): string[] {
   return out
 }
 
-async function findOnPath(name: string): Promise<string | null> {
-  try {
-    const { stdout } = await execFileAsync(os.platform() === 'win32' ? 'where' : 'which', [name])
-    const found = stdout.trim().split('\n')[0].trim()
-    return found || null
-  } catch {
-    return null
-  }
-}
-
 interface Interpreter {
   command: string
   // 脚本路径之前的参数（如 cmd /c、powershell -File）
@@ -50,21 +42,28 @@ interface Interpreter {
 }
 
 // 按扩展名分发解释器
-async function resolveInterpreter(scriptPath: string): Promise<Interpreter | { error: string }> {
+// scriptsRoot 用于给 .py 脚本设 PYTHONPATH，使同级模块导入（如 morningstar render.py 的 from chart_builders import ...）生效
+async function resolveInterpreter(scriptPath: string, scriptsRoot: string): Promise<Interpreter | { error: string }> {
   const ext = path.extname(scriptPath).toLowerCase()
   const isWin = os.platform() === 'win32'
 
   switch (ext) {
     case '.py': {
-      const py = await detectPythonPath()
-      return py
-        ? { command: py, beforeScript: [] }
-        : { error: '未检测到 Python 解释器。请先安装 Python 并加入 PATH，或在设置中通过 MCP 模板检测 Python 环境。' }
+      // 优先内置便携 Python 3.8.10（预装 numpy/scipy/pandas/matplotlib），其次系统 PATH
+      const py = await resolvePythonPath()
+      if (!py) {
+        return { error: '未找到 Python 解释器（内置便携版缺失且系统无 python）。请运行 `node scripts/prepare-python.cjs` 准备便携 Python，或在系统安装 Python 后加入 PATH。' }
+      }
+      // PYTHONPATH 同时含 scripts 根目录与脚本所在目录，覆盖同级模块导入和嵌套子目录脚本
+      const pyPath = [scriptsRoot, path.dirname(scriptPath)]
+        .filter((p, i, arr) => arr.indexOf(p) === i)
+        .join(path.delimiter)
+      return { command: py, beforeScript: [], env: buildSafeEnv({ PYTHONPATH: pyPath }) }
     }
     case '.js':
     case '.mjs':
       // Electron 自带 Node 运行时（ELECTRON_RUN_AS_NODE），无需用户安装任何环境
-      return { command: process.execPath, beforeScript: [], env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } }
+      return { command: process.execPath, beforeScript: [], env: buildSafeEnv({ ELECTRON_RUN_AS_NODE: '1' }) }
     case '.bat':
     case '.cmd':
       return isWin
@@ -90,25 +89,6 @@ async function resolveInterpreter(scriptPath: string): Promise<Interpreter | { e
   }
 }
 
-// 首次执行审批：信任此技能 / 仅一次 / 拒绝
-async function requestApproval(skillName: string, commandLine: string): Promise<'trust' | 'once' | 'deny'> {
-  const options = {
-    type: 'warning' as const,
-    title: '技能脚本执行确认',
-    message: `技能「${skillName}」请求执行脚本`,
-    detail: `即将执行：\n${commandLine}\n\n第三方技能脚本可能读写你的文件系统或访问网络，请确认技能来源可信。`,
-    buttons: ['信任此技能并执行', '仅执行一次', '拒绝'],
-    defaultId: 1,
-    cancelId: 2,
-    noLink: true
-  }
-  const win = BrowserWindow.getAllWindows()[0]
-  const { response } = win
-    ? await dialog.showMessageBox(win, options)
-    : await dialog.showMessageBox(options)
-  return response === 0 ? 'trust' : response === 1 ? 'once' : 'deny'
-}
-
 function truncateOutput(text: string): string {
   if (text.length <= OUTPUT_LIMIT) return text
   return text.slice(0, OUTPUT_LIMIT) + `\n...（输出过长已截断，共 ${text.length} 字符）`
@@ -127,6 +107,10 @@ async function runSkillScript(params: RunSkillScriptParams): Promise<string> {
   if (!skill) return `未找到启用中的技能「${params.skill}」`
   if (!skill.package_path) return `技能「${skill.name}」没有技能包目录（手动创建的技能不附带脚本）`
 
+  // 文件防护：技能包目录命中受保护路径则拦截
+  const protectPkg = checkPathAllowed(skill.package_path)
+  if (!protectPkg.ok) return `⛔ 文件防护拦截：技能包目录命中受保护路径（${protectPkg.protectedPath}）`
+
   // 路径校验：脚本必须位于 <package>/scripts/ 内，防目录穿越
   const scriptsRoot = path.resolve(skill.package_path, 'scripts')
   const relScript = params.script.replace(/\\/g, '/').replace(/^scripts\//, '')
@@ -134,12 +118,15 @@ async function runSkillScript(params: RunSkillScriptParams): Promise<string> {
   if (!scriptPath.startsWith(scriptsRoot + path.sep)) {
     return '脚本路径非法：只能执行技能包 scripts/ 目录内的脚本'
   }
+  // 文件防护：脚本文件命中受保护路径则拦截
+  const protectScript = checkPathAllowed(scriptPath)
+  if (!protectScript.ok) return `⛔ 文件防护拦截：脚本路径命中受保护路径（${protectScript.protectedPath}）`
   if (!fs.existsSync(scriptPath) || !fs.statSync(scriptPath).isFile()) {
     const available = listSkillScripts(skill.package_path)
     return `脚本不存在: ${params.script}${available.length > 0 ? `\n该技能可用脚本: ${available.join('、')}` : '\n该技能包内没有 scripts/ 目录'}`
   }
 
-  const interpreter = await resolveInterpreter(scriptPath)
+  const interpreter = await resolveInterpreter(scriptPath, scriptsRoot)
   if ('error' in interpreter) return interpreter.error
 
   const args = [
@@ -147,25 +134,16 @@ async function runSkillScript(params: RunSkillScriptParams): Promise<string> {
     ...(interpreter.runDirect ? [] : [scriptPath]),
     ...parseArgs(params.args)
   ]
-  const commandLine = [interpreter.command, ...args].join(' ')
 
-  // 首次信任审批：信任过的技能后续直接执行
-  const trusted: string[] = (config.get('trustedSkillPackages') as string[] | undefined) || []
-  if (!trusted.includes(skill.id)) {
-    const decision = await requestApproval(skill.name, commandLine)
-    if (decision === 'deny') return '用户拒绝了本次脚本执行'
-    if (decision === 'trust') {
-      config.set('trustedSkillPackages', [...trusted, skill.id])
-    }
-  }
-
+  // 执行审批由安全策略门统一处理（risk=execute 默认 ask，弹聊天内审批卡），
+  // 此处不再重复弹窗。运行环境使用白名单清洗后的最小环境，防敏感变量泄露。
   try {
     const { stdout, stderr } = await execFileAsync(interpreter.command, args, {
       cwd: skill.package_path,
       timeout: EXEC_TIMEOUT,
       maxBuffer: 1024 * 1024,
       windowsHide: true,
-      env: interpreter.env || process.env
+      env: interpreter.env || buildSafeEnv()
     })
     const parts: string[] = []
     if (stdout?.trim()) parts.push(`标准输出:\n${truncateOutput(stdout.trim())}`)

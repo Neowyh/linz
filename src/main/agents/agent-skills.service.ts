@@ -73,6 +73,31 @@ export function getEffectiveSkillsForAgent(agentType: string, task: string): Age
   return matched.slice(0, 10)
 }
 
+// 技能触发信息：用于流式链路发射"技能已触发"UI 提示（与工具调用卡片同层展示）
+export interface SkillTriggerInfo {
+  skillId: string
+  skillName: string
+  source: 'forced' | 'matched'  // forced=用户在对话中 "/" 主动注入；matched=关键词自动匹配
+}
+
+// 计算某个 Agent + 任务实际生效的技能（强制注入优先 + 关键词匹配），返回技能列表与触发信息。
+// getEffectiveSystemPrompt 用它拼 prompt；流式链路用它发射 skillTriggers chunk 给渲染端展示。
+export function resolveEffectiveSkills(
+  agentType: string,
+  task: string | undefined,
+  forcedSkillIds?: string[]
+): { skills: AgentSkill[]; triggers: SkillTriggerInfo[] } {
+  const forced = forcedSkillIds?.length ? getSkillsByIds(forcedSkillIds) : []
+  const matched = getEffectiveSkillsForAgent(agentType, task || '')
+  const forcedIds = new Set(forced.map((s) => s.id))
+  const skills = [...forced, ...matched.filter((s) => !forcedIds.has(s.id))]
+  const triggers: SkillTriggerInfo[] = [
+    ...forced.map((s) => ({ skillId: s.id, skillName: s.name, source: 'forced' as const })),
+    ...matched.filter((s) => !forcedIds.has(s.id)).map((s) => ({ skillId: s.id, skillName: s.name, source: 'matched' as const }))
+  ]
+  return { skills, triggers }
+}
+
 // 列出技能包 scripts/ 下的脚本文件（相对路径，如 scripts/run.py）
 export function listSkillScripts(packagePath: string): string[] {
   try {

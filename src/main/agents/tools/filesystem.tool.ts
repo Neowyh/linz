@@ -4,23 +4,17 @@ import { z } from 'zod'
 import * as fs from 'fs'
 import * as path from 'path'
 import type { AgentContext } from '../base.agent'
+import { resolveWithinRoot } from '../../fs/path-guard'
+import { checkPathAllowed } from '../../security/file-protection'
 
 const MAX_READ_CHARS = 10000
-const BLOCKED_WRITE_EXTS = ['.exe', '.bat', '.cmd', '.sh', '.com', '.scr', '.vbs', '.ps1']
+const BLOCKED_WRITE_EXTS = [
+  '.exe', '.bat', '.cmd', '.sh', '.com', '.scr', '.vbs', '.ps1',
+  '.dll', '.sys', '.lnk', '.url', '.reg', '.msi', '.jar', '.appx'
+]
 
 export interface FilesystemToolDeps {
   context: AgentContext
-}
-
-// 将用户输入的路径解析为工作空间内的绝对路径，并校验未越界
-// 返回 { ok, resolved, error } —— ok=false 时 error 为中文错误说明
-function resolveWithinRoot(inputPath: string, root: string): { ok: boolean; resolved?: string; error?: string } {
-  const rootResolved = path.resolve(root)
-  const resolved = path.resolve(rootResolved, inputPath)
-  if (resolved !== rootResolved && !resolved.startsWith(rootResolved + path.sep)) {
-    return { ok: false, error: `路径越界，仅可访问工作空间目录内文件: ${rootResolved}` }
-  }
-  return { ok: true, resolved }
 }
 
 export function createFilesystemTools(deps: FilesystemToolDeps): Tool[] {
@@ -47,6 +41,8 @@ export function createFilesystemTools(deps: FilesystemToolDeps): Tool[] {
       const checked = resolveWithinRoot(relPath, r.root!)
       if (!checked.ok) return checked.error!
       const resolved = checked.resolved!
+      const protect = checkPathAllowed(resolved)
+      if (!protect.ok) return `⛔ 文件防护拦截：该路径命中受保护目录（${protect.protectedPath}）`
       try {
         if (!fs.existsSync(resolved)) return `文件不存在: ${relPath}`
         const stat = fs.statSync(resolved)
@@ -75,6 +71,8 @@ export function createFilesystemTools(deps: FilesystemToolDeps): Tool[] {
       const checked = resolveWithinRoot(relPath, r.root!)
       if (!checked.ok) return checked.error!
       const resolved = checked.resolved!
+      const protect = checkPathAllowed(resolved)
+      if (!protect.ok) return `⛔ 文件防护拦截：该路径命中受保护目录（${protect.protectedPath}）`
       const ext = path.extname(resolved).toLowerCase()
       if (BLOCKED_WRITE_EXTS.includes(ext)) {
         return `禁止写入可执行文件类型: ${ext}`
@@ -104,6 +102,8 @@ export function createFilesystemTools(deps: FilesystemToolDeps): Tool[] {
       const checked = resolveWithinRoot(target, r.root!)
       if (!checked.ok) return checked.error!
       const resolved = checked.resolved!
+      const protect = checkPathAllowed(resolved)
+      if (!protect.ok) return `⛔ 文件防护拦截：该路径命中受保护目录（${protect.protectedPath}）`
       try {
         if (!fs.existsSync(resolved)) return `目录不存在: ${target}`
         const stat = fs.statSync(resolved)

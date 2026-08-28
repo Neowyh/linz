@@ -1,9 +1,18 @@
 import { getDatabase, debounceSave } from '../database'
 import { v4 as uuidv4 } from 'uuid'
 import { agentRegistry } from './agent-registry'
-import { DynamicAgent, CustomAgentRow } from './dynamic.agent'
+import { DynamicAgent, CustomAgentRow, safeParseArray } from './dynamic.agent'
 import type { AgentOverrideConfig } from './base.agent'
 import { reregisterBuiltinAgents } from './reregister'
+
+// 内置 Agent id 集合（导出/导入校验、委派目标有效性判断复用）
+export const BUILTIN_AGENT_IDS = ['orchestrator', 'general', 'aero', 'structural', 'propulsion', 'avionics', 'simulation', 'documentation', 'retriever']
+
+// 将 IPC 更新值转换为 sql.js 支持的绑定值；undefined/null 表示 SQL NULL。
+function normalizeBindValue(value: any): any {
+  if (value === undefined || value === null) return null
+  return typeof value === 'object' ? JSON.stringify(value) : value
+}
 
 // 关键词缓存：keyword -> agentId
 let customKeywordCache: Record<string, string> = {}
@@ -15,7 +24,8 @@ export function getCustomKeywords(): Record<string, string> {
 }
 
 export function getCustomSubtaskPrefix(agentType: string): string | null {
-  return customPrefixCache[agentType] || null
+  // 用 ?? 而非 ||：空串是合法的"不加前缀"显式设置，不应被当 falsy 当成"未设置"
+  return customPrefixCache[agentType] ?? null
 }
 
 export function refreshCustomKeywordCache(): void {
@@ -67,13 +77,21 @@ export function registerCustomAgentsFromDB(): void {
     const db = getDatabase()
     const results = db.exec(`SELECT ${AGENT_COLUMNS} FROM custom_agents WHERE is_custom = 1`)
     if (!results[0]) return
+    let registered = 0
     for (const row of results[0].values) {
-      const agentRow = rowToCustomAgent(row)
-      const agent = new DynamicAgent(agentRow)
-      agentRegistry.register(agent)
+      try {
+        const agentRow = rowToCustomAgent(row)
+        const agent = new DynamicAgent(agentRow)
+        agentRegistry.register(agent)
+        registered++
+      } catch (err) {
+        // 单条坏数据不应中断整批自定义 Agent 注册：跳过并告警，其余继续
+        console.warn('[CustomAgents] Skipping malformed custom agent row:', row[0], err)
+        continue
+      }
     }
     refreshCustomKeywordCache()
-    console.log(`[CustomAgents] Registered ${results[0].values.length} custom agents`)
+    console.log(`[CustomAgents] Registered ${registered} custom agents`)
   } catch (err) {
     console.warn('[CustomAgents] Failed to register custom agents:', err)
   }
@@ -166,7 +184,7 @@ export function updateCustomAgent(id: string, updates: Record<string, any>): { s
     const dbKey = key === 'systemPrompt' ? 'system_prompt' : key === 'subtaskPrefix' ? 'subtask_prefix' : key === 'modelName' ? 'model_name' : key === 'kbTags' ? 'kb_tags' : key
     if (!allowedFields.includes(dbKey)) continue
     setClauses.push(`${dbKey} = ?`)
-    values.push(typeof value === 'object' ? JSON.stringify(value) : value)
+    values.push(normalizeBindValue(value))
   }
 
   if (setClauses.length === 0) return { success: true }
@@ -303,7 +321,7 @@ export function updateBuiltinAgent(id: string, updates: Record<string, any>): { 
     const dbKey = key === 'kbTags' ? 'kb_tags' : key
     if (!allowedFields.includes(dbKey)) continue
     setClauses.push(`${dbKey} = ?`)
-    values.push(typeof value === 'object' ? JSON.stringify(value) : value)
+    values.push(normalizeBindValue(value))
   }
 
   if (setClauses.length === 0) return { success: true }
@@ -347,4 +365,152 @@ export function resetBuiltinAgent(id: string, seedFn: (db: any, id: string) => v
   }
 
   return { success: true }
+}
+
+// ============ 导出 / 导入（自定义 Agent 跨机器迁移） ============
+
+// 导入候选：parse 后交给 UI 预览确认
+export interface AgentImportCandidate {
+  name: string
+  description: string | null
+  color: string
+  icon: string
+  system_prompt: string
+  tools: string[]
+  keywords: string[]
+  delegates_to: string[]
+  subtask_prefix: string | null
+  model_name: string
+  engine: string
+  kb_tags: string[]
+  duplicate: boolean       // 与本库现有 Agent 重名（确认导入时会自动加后缀）
+  warnings: string[]       // MCP marker / 委派目标等跨机器提示
+  sourceLabel: string      // 来源文件名，用于 UI 展示
+}
+
+// 导出文件名净化（与 export.ipc.ts 同款正则）
+function sanitizeFileName(name: string): string {
+  return name.replace(/[\\/:*?"<>|]/g, '_')
+}
+
+// MCP server marker 工具前缀（与渲染端 types/customAgent.ts 同款，主进程独立判断避免跨端依赖）
+const MCP_SERVER_MARKER_PREFIX = 'mcp_server:'
+function isMcpServerMarker(name: string): boolean {
+  return typeof name === 'string' && name.startsWith(MCP_SERVER_MARKER_PREFIX)
+}
+
+// 把自定义 Agent 序列化为可分享的 JSON 字符串（不碰磁盘，写盘由 IPC 层负责）
+export function exportCustomAgentToJSON(id: string): { content: string; fileName: string } | null {
+  const row = getCustomAgent(id)
+  if (!row) return null
+  if (!row.is_custom) {
+    throw new Error('内置 Agent 不支持导出')
+  }
+  const payload = {
+    $schema: 'linz-agent-v1',
+    exportedAt: new Date().toISOString(),
+    agent: {
+      name: row.name,
+      description: row.description || '',
+      color: row.color,
+      icon: row.icon,
+      system_prompt: row.system_prompt,
+      tools: safeParseArray(row.tools),
+      keywords: safeParseArray(row.keywords),
+      delegates_to: safeParseArray(row.delegates_to),
+      subtask_prefix: row.subtask_prefix,
+      model_name: row.model_name || 'deepseek-chat',
+      engine: row.engine || 'deepseek',
+      kb_tags: safeParseArray(row.kb_tags)
+    }
+  }
+  const content = JSON.stringify(payload, null, 2)
+  const fileName = `${sanitizeFileName(row.name)}.linz-agent.json`
+  return { content, fileName }
+}
+
+// 解析导入文件内容 → 候选（含跨机器 warning、重名标记），不落库
+export function parseAgentImportFile(raw: string, sourceLabel: string): { candidate: AgentImportCandidate | null; errors: string[] } {
+  const errors: string[] = []
+  let obj: any
+  try {
+    obj = JSON.parse(raw)
+  } catch {
+    return { candidate: null, errors: [`${sourceLabel}: JSON 解析失败，不是合法的 Agent 文件`] }
+  }
+  if (!obj || obj.$schema !== 'linz-agent-v1' || !obj.agent || typeof obj.agent !== 'object') {
+    return { candidate: null, errors: [`${sourceLabel}: 不是临智 Agent 导出文件（$schema 不匹配）`] }
+  }
+  const a = obj.agent
+  // 必填字段校验
+  if (!a.name || typeof a.name !== 'string' || !a.name.trim()) errors.push(`${sourceLabel}: 缺少 name`)
+  if (!a.system_prompt || typeof a.system_prompt !== 'string' || !a.system_prompt.trim()) errors.push(`${sourceLabel}: 缺少 system_prompt`)
+  if (!a.color) errors.push(`${sourceLabel}: 缺少 color`)
+  if (!a.icon) errors.push(`${sourceLabel}: 缺少 icon`)
+  if (errors.length > 0) return { candidate: null, errors }
+
+  const tools: string[] = Array.isArray(a.tools) ? a.tools.filter((t: any) => typeof t === 'string') : []
+  const keywords: string[] = Array.isArray(a.keywords) ? a.keywords.filter((t: any) => typeof t === 'string') : []
+  const delegatesTo: string[] = Array.isArray(a.delegates_to) ? a.delegates_to.filter((t: any) => typeof t === 'string') : []
+  const kbTags: string[] = Array.isArray(a.kb_tags) ? a.kb_tags.filter((t: any) => typeof t === 'string') : []
+
+  const warnings: string[] = []
+  // MCP server marker：目标机器需配同名 MCP 服务器
+  const mcpMarkers = tools.filter(isMcpServerMarker)
+  if (mcpMarkers.length > 0) {
+    warnings.push(`工具含 MCP 服务器挂载标记（${mcpMarkers.join(', ')}），目标机器需配置同名 MCP 服务器，否则该工具不生效`)
+  }
+  // 委派目标非内置 id：目标机器可能不存在该自定义 agent
+  const externalDelegates = delegatesTo.filter((t) => !BUILTIN_AGENT_IDS.includes(t))
+  if (externalDelegates.length > 0) {
+    warnings.push(`委派目标 ${externalDelegates.join(', ')} 在目标机器可能不存在，导入后需在编辑器里重新配置委派关系`)
+  }
+
+  const name = a.name.trim()
+  const candidate: AgentImportCandidate = {
+    name,
+    description: a.description ?? null,
+    color: a.color,
+    icon: a.icon,
+    system_prompt: a.system_prompt,
+    tools,
+    keywords,
+    delegates_to: delegatesTo,
+    subtask_prefix: a.subtask_prefix ?? null,
+    model_name: a.model_name || 'deepseek-chat',
+    engine: a.engine === 'pi' ? 'pi' : 'deepseek',
+    kb_tags: kbTags,
+    duplicate: isAgentNameTaken(name),
+    warnings,
+    sourceLabel
+  }
+  return { candidate, errors }
+}
+
+// 确认导入：重名自动加 " (n)" 后缀，复用 createCustomAgent 落库+热注册
+export function confirmAgentImport(item: AgentImportCandidate): { success: boolean; agent?: CustomAgentRow; error?: string } {
+  let name = item.name.trim()
+  if (isAgentNameTaken(name)) {
+    let n = 2
+    while (isAgentNameTaken(`${name} (${n})`)) n++
+    name = `${name} (${n})`
+  }
+  try {
+    const row = createCustomAgent({
+      name,
+      description: item.description || undefined,
+      color: item.color,
+      icon: item.icon,
+      systemPrompt: item.system_prompt,
+      tools: item.tools,
+      keywords: item.keywords,
+      subtaskPrefix: item.subtask_prefix || undefined,
+      modelName: item.model_name,
+      engine: item.engine === 'pi' ? 'pi' : 'deepseek',
+      kbTags: item.kb_tags
+    })
+    return { success: true, agent: row }
+  } catch (err: any) {
+    return { success: false, error: err?.message || String(err) }
+  }
 }

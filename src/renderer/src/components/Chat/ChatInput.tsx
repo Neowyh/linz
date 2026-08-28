@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { SendOutlined, PaperClipOutlined, SearchOutlined, StopOutlined, ExportOutlined, CloseOutlined, FileTextOutlined, LoadingOutlined, CheckCircleOutlined, ExclamationCircleOutlined, DownOutlined, RobotOutlined, FolderOpenOutlined, ThunderboltOutlined } from '@ant-design/icons'
-import { message, Dropdown, Tooltip, Radio } from 'antd'
+import { SendOutlined, PaperClipOutlined, SearchOutlined, StopOutlined, ExportOutlined, CloseOutlined, FileTextOutlined, LoadingOutlined, CheckCircleOutlined, ExclamationCircleOutlined, DownOutlined, RobotOutlined, FolderOpenOutlined, ThunderboltOutlined, SafetyOutlined } from '@ant-design/icons'
+import { message, Dropdown, Tooltip, Radio, Modal } from 'antd'
 import type { MenuProps } from 'antd'
 import { useCustomAgentStore } from '../../stores/customAgentStore'
 import { useChatStore } from '../../stores/chatStore'
@@ -561,7 +561,7 @@ export default function ChatInput({ onSend, onAbort, isStreaming, disabled, onEx
             placeholder="请描述您的飞行器设计任务…（输入 @ 选择 Agent，/ 注入技能）"
             disabled={disabled}
             rows={1}
-            className="flex-1 resize-none outline-none text-sm text-gray-900 placeholder:text-gray-300 min-h-[36px] max-h-[160px]"
+            className="flex-1 min-w-0 resize-none outline-none text-sm text-gray-900 placeholder:text-gray-300 min-h-[36px] max-h-[160px]"
           />
 
           {/* 知识库检索按钮 */}
@@ -614,9 +614,93 @@ export default function ChatInput({ onSend, onAbort, isStreaming, disabled, onEx
           )}
         </div>
 
+        {/* 权限模式切换：默认权限（逐次询问）/ 完全访问（仅文件写入提醒） */}
+        <PermissionModeToggle />
+
         {/* Agent 模式选择器 */}
         <AgentModeSelector />
       </div>
+    </div>
+  )
+}
+
+// 权限模式切换：默认权限（每类危险操作逐次询问）/ 完全访问（仅文件写入仍提醒，其余放行）
+// 切到完全访问需弹窗二次确认风险。状态持久化在 app-config（security:getMode/setMode）。
+function PermissionModeToggle(): JSX.Element | null {
+  const [mode, setMode] = useState<'default' | 'full' | null>(null)
+
+  useEffect(() => {
+    window.aeromind.security.getMode().then((m) => setMode(m === 'full' ? 'full' : 'default'))
+  }, [])
+
+  const switchTo = async (target: 'default' | 'full'): Promise<void> => {
+    if (target === 'default') {
+      const r = await window.aeromind.security.setMode('default')
+      if (r.success) setMode('default')
+      return
+    }
+    // 开启完全访问需二次确认风险
+    Modal.confirm({
+      title: '开启完全访问？',
+      icon: <ExclamationCircleOutlined style={{ color: '#CF1322' }} />,
+      content: (
+        <div className="text-xs leading-relaxed">
+          <p>
+            开启后，Agent 调用<strong>脚本执行 / 委派 / 网络</strong>等工具将<strong>不再逐次询问</strong>，仅在<strong>文件写入</strong>时仍会提醒确认。
+          </p>
+          <p className="mt-2 text-red-600">
+            风险提示：脚本可读写或删除文件、访问网络。请仅在信任当前对话的 Agent 时开启，可随时切回默认权限。
+          </p>
+        </div>
+      ),
+      okText: '开启完全访问',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        const r = await window.aeromind.security.setMode('full')
+        if (r.success) setMode('full')
+      }
+    })
+  }
+
+  if (mode === null) return null
+  const full = mode === 'full'
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 mt-2 px-1">
+      <div className="flex items-center gap-1.5">
+        <span className="flex items-center gap-1 text-[11px] text-gray-400 mr-1">
+          <SafetyOutlined style={{ fontSize: 11 }} />
+          权限
+        </span>
+        <button
+          onClick={() => switchTo('default')}
+          className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-all border ${
+            !full
+              ? 'bg-blue-50 text-blue-600 border-blue-200 hover:bg-blue-100'
+              : 'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'
+          }`}
+          title="每类危险操作（写入/脚本/委派/网络）都会弹出确认卡"
+        >
+          <SafetyOutlined />
+          默认权限
+        </button>
+        <button
+          onClick={() => switchTo('full')}
+          className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-all border ${
+            full
+              ? 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100'
+              : 'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'
+          }`}
+          title="脚本/委派/网络不再询问，仅文件写入仍提醒"
+        >
+          <ThunderboltOutlined />
+          完全访问
+        </button>
+      </div>
+      {full && (
+        <span className="text-[11px] text-red-500 font-medium">完全访问中 · 仅文件写入仍会提醒</span>
+      )}
     </div>
   )
 }
@@ -674,9 +758,14 @@ function AgentModeSelector(): JSX.Element {
   const isCollaborative = dispatchMode === 'collaborative'
 
   return (
-    <div className="flex items-center justify-between mt-2 px-1">
-      <div className="flex items-center gap-2">
-        <Dropdown menu={{ items: menuItems }} trigger={['click']} placement="topLeft" disabled={isCollaborative}>
+    <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5 mt-2 px-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <Dropdown
+          menu={{ items: menuItems, style: { maxHeight: 'min(50vh, 320px)', overflow: 'auto' } }}
+          trigger={['click']}
+          placement="topLeft"
+          disabled={isCollaborative}
+        >
           <button
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-all border ${
               isGeneral
@@ -715,20 +804,24 @@ function AgentModeSelector(): JSX.Element {
 }
 
 // 工作空间按钮：选择 agent 文件读写工具的合法根目录
-// 路径持久化在 settings.fileWorkspacePath，未设置时 agent 无文件工具
+// 路径持久化在当前工作区（workspace.getFolder/setFolder），与右侧文件管理器共用
 function FileWorkspaceButton(): JSX.Element {
   const [wsPath, setWsPath] = useState('')
 
   useEffect(() => {
-    window.aeromind.settings.get('fileWorkspacePath').then((p: unknown) => {
-      setWsPath((p as string) || '')
+    window.aeromind.workspace.getFolder().then(({ folder }) => {
+      setWsPath(folder || '')
     })
   }, [])
 
   const handlePick = async (): Promise<void> => {
     const picked = await window.aeromind.fileWorkspace.pickFolder()
     if (picked) {
-      await window.aeromind.settings.set('fileWorkspacePath', picked)
+      const r = await window.aeromind.workspace.setFolder(picked)
+      if (!r.success) {
+        message.error(r.error || '设置工作空间失败')
+        return
+      }
       setWsPath(picked)
       message.success(`已设置工作空间: ${picked}`)
     }
@@ -736,7 +829,7 @@ function FileWorkspaceButton(): JSX.Element {
 
   const handleClear = async (e: React.MouseEvent): Promise<void> => {
     e.stopPropagation()
-    await window.aeromind.settings.set('fileWorkspacePath', '')
+    await window.aeromind.workspace.setFolder('')
     setWsPath('')
     message.success('已清空工作空间，Agent 文件工具已禁用')
   }

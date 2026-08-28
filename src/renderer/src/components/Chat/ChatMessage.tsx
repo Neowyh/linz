@@ -1,11 +1,14 @@
-import { FileTextOutlined, FileWordOutlined, DownloadOutlined, ToolOutlined, BulbOutlined, CheckCircleFilled, LoadingOutlined } from '@ant-design/icons'
+import { FileTextOutlined, FileWordOutlined, DownloadOutlined, ToolOutlined, BulbOutlined, CheckCircleFilled, LoadingOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { message as antdMessage, Collapse } from 'antd'
 import { useState } from 'react'
-import type { ChatMessage as ChatMessageType, ToolCallEntry } from '../../types/chat'
+import type { ChatMessage as ChatMessageType, ToolCallEntry, SkillTriggerInfo } from '../../types/chat'
 import { resolveAgentDisplaySnapshot } from '../../utils/agentDisplay'
 import { extractImagesToFiles, convertContentSvgToPng } from '../../utils/exportImages'
+import { useApprovalStore } from '../../stores/approvalStore'
 import MarkdownRenderer from '../Markdown/MarkdownRenderer'
 import AgentBadge from './AgentBadge'
+import ApprovalCard from './ApprovalCard'
+import TypingIndicator from './TypingIndicator'
 
 interface ChatMessageProps {
   message: ChatMessageType
@@ -138,6 +141,33 @@ function ToolCallCard({ call }: { call: ToolCallEntry }): JSX.Element {
   )
 }
 
+// 技能触发卡片：与工具调用卡片同层展示，让用户清楚看到本次任务注入/匹配了哪些技能
+function SkillTriggerCard({ triggers }: { triggers: SkillTriggerInfo[] }): JSX.Element {
+  return (
+    <div className="border border-purple-200 rounded-md bg-purple-50/50 text-xs">
+      <div className="flex items-center gap-2 px-3 py-1.5">
+        <ThunderboltOutlined style={{ fontSize: 12, color: '#722ED1' }} />
+        <span className="font-medium text-purple-700">技能已触发</span>
+        <span className="ml-auto text-[10px] text-purple-400">{triggers.length} 个技能已注入</span>
+      </div>
+      <div className="px-3 pb-2 flex flex-wrap gap-1.5">
+        {triggers.map((t) => (
+          <span
+            key={t.skillId}
+            className="flex items-center gap-1 px-2 py-0.5 rounded-md border border-purple-200 bg-white text-purple-700"
+          >
+            <ThunderboltOutlined style={{ fontSize: 10 }} />
+            <span className="font-medium">{t.skillName}</span>
+            {t.source === 'forced' && (
+              <span className="text-[10px] text-purple-400 border-l border-purple-200 pl-1 ml-0.5">手动</span>
+            )}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export default function ChatMessage({ message }: ChatMessageProps): JSX.Element {
   const isUser = message.role === 'user'
   const [exporting, setExporting] = useState<'word' | null>(null)
@@ -207,6 +237,10 @@ export default function ChatMessage({ message }: ChatMessageProps): JSX.Element 
 
   const hasThinking = !isUser && message.thinking && message.thinking.trim().length > 0
   const hasToolCalls = !isUser && message.toolCalls && message.toolCalls.length > 0
+  const hasSkillTriggers = !isUser && message.skillTriggers && message.skillTriggers.length > 0
+  const pendingApprovals = useApprovalStore((s) =>
+    Object.values(s.pending).filter((a) => a.messageId === message.id)
+  )
 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-4`}>
@@ -281,6 +315,11 @@ export default function ChatMessage({ message }: ChatMessageProps): JSX.Element 
                 />
               )}
 
+              {/* 技能触发卡片（与工具调用同层，让用户清楚看到技能已注入） */}
+              {hasSkillTriggers && (
+                <SkillTriggerCard triggers={message.skillTriggers!} />
+              )}
+
               {/* 工具调用卡片 */}
               {hasToolCalls && (
                 <div className="space-y-1.5">
@@ -293,10 +332,22 @@ export default function ChatMessage({ message }: ChatMessageProps): JSX.Element 
                 </div>
               )}
 
+              {/* 安全审批卡片（等待用户确认的危险操作） */}
+              {pendingApprovals.length > 0 && (
+                <div className="space-y-1.5">
+                  {pendingApprovals.map((approval) => (
+                    <ApprovalCard key={approval.requestId} approval={approval} />
+                  ))}
+                </div>
+              )}
+
               {/* 主内容 */}
               {message.content ? (
                 <MarkdownRenderer content={message.content} />
-              ) : !hasThinking && !hasToolCalls ? (
+              ) : message.isStreaming ? (
+                /* 模型回答前：动态等待标志（三点跳动 + 轮播文案），提示代理仍在工作 */
+                <TypingIndicator />
+              ) : !hasThinking && !hasToolCalls && !hasSkillTriggers && pendingApprovals.length === 0 ? (
                 <span className="text-gray-400 text-xs italic">（等待响应...）</span>
               ) : null}
               {message.isStreaming && message.content && (

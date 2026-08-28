@@ -14,6 +14,9 @@ interface CustomAgentState {
   fetchBuiltinAgents: () => Promise<void>
   updateBuiltinAgent: (id: string, updates: any) => Promise<{ success: boolean; error?: string }>
   resetBuiltinAgent: (id: string) => Promise<{ success: boolean; error?: string }>
+  exportAgent: (id: string) => Promise<{ success: boolean; filePath?: string; error?: string; canceled?: boolean }>
+  importParse: (paths: string[]) => Promise<{ candidates: any[]; errors: string[] }>
+  importConfirm: (items: any[]) => Promise<{ success: boolean; imported: number; names: string[]; errors?: string[] }>
 }
 
 export const useCustomAgentStore = create<CustomAgentState>((set, get) => ({
@@ -84,6 +87,22 @@ export const useCustomAgentStore = create<CustomAgentState>((set, get) => ({
     const result = await window.aeromind.customAgent.resetBuiltin(id)
     if (result.success) {
       await get().fetchBuiltinAgents()
+    }
+    return result
+  },
+
+  exportAgent: async (id) => {
+    return window.aeromind.customAgent.exportAgent(id)
+  },
+
+  importParse: async (paths) => {
+    return window.aeromind.customAgent.importParse(paths)
+  },
+
+  importConfirm: async (items) => {
+    const result = await window.aeromind.customAgent.importConfirm(items)
+    if (result.imported > 0) {
+      await get().fetchAgents()
     }
     return result
   }

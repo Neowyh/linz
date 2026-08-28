@@ -4,6 +4,11 @@ import type { Tool } from '@langchain/core/tools'
 import { withRetry } from './retry'
 import { createFallbackModel, createOllamaModel, isOllamaAvailable } from './index'
 import { extractImageBlocks } from './image-protocol'
+import type { SecurityContext } from '../agents/base.agent'
+import { resolveDecision, rememberApproval, summarizeArgs } from '../agents/tools/permission.service'
+import { approvalManager } from '../security/approval-manager'
+import { writeAudit } from '../security/audit'
+import { getBlockedByArgs } from '../security/file-protection'
 
 export interface StreamOptions {
   systemPrompt: string
@@ -13,6 +18,7 @@ export interface StreamOptions {
   fallbackModel?: string
   tools?: Tool[]
   signal?: AbortSignal
+  securityContext?: SecurityContext  // 提供时对工具调用执行策略门 + 用户审批
 }
 
 export interface ToolCallResult {
@@ -29,6 +35,12 @@ export type StreamOutput = string | ToolCallResult
 const MAX_TOOL_OUTPUT = 10000
 // 单个工具调用超时（CATIA 等重型工具可能需要较长时间，但不应无限等待）
 const TOOL_TIMEOUT_MS = 120000
+// 部分工具需要更长时间（如 html_to_word 需等待用户在弹出的原生对话框中选文件；
+// browser 需等待慢站点加载与 wait 元素出现）。相比默认 120s 放宽，仅对列表内工具生效。
+const TOOL_TIMEOUT_OVERRIDES: Record<string, number> = {
+  html_to_word: 30 * 60 * 1000,
+  browser: 180_000
+}
 // 多轮工具调用最大轮数（防止 LLM 陷入死循环）
 const MAX_TOOL_ROUNDS = 100
 
@@ -42,12 +54,13 @@ function isAbortError(err: any): boolean {
 
 // 带超时执行工具，避免 CATIA 等工具阻塞整个流
 // 若提供 signal，则同时监听 abort 以便尽快返回
-async function invokeWithTimeout(tool: Tool, args: any, signal?: AbortSignal): Promise<string> {
+// timeoutMs 可覆盖默认超时（如 html_to_word 需等待用户选文件）
+async function invokeWithTimeout(tool: Tool, args: any, signal?: AbortSignal, timeoutMs: number = TOOL_TIMEOUT_MS): Promise<string> {
   let timer: NodeJS.Timeout | null = null
   const timeoutPromise = new Promise<never>((_, reject) => {
     timer = setTimeout(
-      () => reject(new Error(`工具执行超时 (${TOOL_TIMEOUT_MS / 1000}s)`)),
-      TOOL_TIMEOUT_MS
+      () => reject(new Error(`工具执行超时 (${timeoutMs / 1000}s)`)),
+      timeoutMs
     )
   })
   const abortPromise: Promise<never> | null = signal
@@ -69,11 +82,12 @@ async function invokeWithTimeout(tool: Tool, args: any, signal?: AbortSignal): P
   }
 }
 
-// 执行工具调用并返回结果消息（带超时 + 输出截断 + abort 监听）
+// 执行工具调用并返回结果消息（带超时 + 输出截断 + abort 监听 + 安全策略门）
 async function executeToolCalls(
   toolCalls: any[],
   tools: Tool[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  securityContext?: SecurityContext
 ): Promise<{ messages: ToolMessage[]; results: ToolCallResult[] }> {
   const toolMap = new Map(tools.map((t) => [t.name, t]))
   const messages: ToolMessage[] = []
@@ -91,8 +105,101 @@ async function executeToolCalls(
     }
 
     const input = typeof tc.args === 'string' ? tc.args : JSON.stringify(tc.args)
+    const args = tc.args && typeof tc.args === 'object' ? tc.args : safeParseArgs(tc.args)
+
+    // 策略决策只算一次（指纹+risk+配置查询），下述文件防护审计与执行后审计均复用
+    const decision = resolveDecision(tc.name, args)
+
+    // ===== 文件防护门：参数中的绝对路径命中受保护路径，直接拦截（优先级高于权限审批） =====
+    // 工具级 resolve 后的相对路径防护由各工具内 checkPathAllowed 兜底
+    const protectedBlock = getBlockedByArgs(args)
+    if (protectedBlock) {
+      const errorMsg = `⛔ 文件防护拦截：${protectedBlock.path}\n（命中受保护路径：${protectedBlock.protectedPath}）`
+      messages.push(new ToolMessage({ content: errorMsg, tool_call_id: tc.id! }))
+      results.push({ type: 'tool_call', tool: tc.name, input, output: errorMsg })
+      if (securityContext) {
+        writeAudit({
+          conversationId: securityContext.conversationId,
+          agentType: securityContext.agentType,
+          toolName: tc.name,
+          argsSummary: summarizeArgs(tc.name, args),
+          risk: decision.risk,
+          decision: 'deny',
+          source: 'protected-path',
+          durationMs: 0
+        })
+      }
+      continue
+    }
+
+    // ===== 安全策略门：deny / ask 在真正执行前拦截 =====
+    let auditDecision: string = 'allow'
+    let auditSource: string = 'policy'
+    let auditStarted = Date.now()
+    if (securityContext) {
+      const auditBase = {
+        conversationId: securityContext.conversationId,
+        agentType: securityContext.agentType,
+        toolName: tc.name,
+        argsSummary: summarizeArgs(tc.name, args),
+        risk: decision.risk
+      }
+
+      if (decision.action === 'deny') {
+        const errorMsg = `操作被安全策略拒绝：${tc.name}（${decision.reason}）`
+        messages.push(new ToolMessage({ content: errorMsg, tool_call_id: tc.id! }))
+        results.push({ type: 'tool_call', tool: tc.name, input, output: errorMsg })
+        writeAudit({ ...auditBase, decision: 'deny', source: decision.reason, durationMs: Date.now() - auditStarted })
+        continue
+      }
+
+      if (decision.action === 'ask') {
+        securityContext.setState('waiting')
+        auditStarted = Date.now()
+        let result: { approved: boolean; remember: boolean; source: 'user' | 'timeout' }
+        try {
+          result = await withAbort(
+            approvalManager.requestApproval({
+              fingerprint: decision.fingerprint,
+              toolName: tc.name,
+              risk: decision.risk,
+              argsSummary: summarizeArgs(tc.name, args),
+              agentType: securityContext.agentType,
+              agentName: securityContext.agentName,
+              agentColor: securityContext.agentColor,
+              messageId: securityContext.messageId
+            }),
+            signal
+          )
+        } catch (abortErr: any) {
+          securityContext.setState('working')
+          if (isAbortError(abortErr) || signal?.aborted) break
+          throw abortErr
+        }
+        securityContext.setState('working')
+
+        if (!result.approved) {
+          const errorMsg = result.source === 'timeout'
+            ? `操作未获确认（审批超时自动拒绝）：${tc.name}`
+            : `操作已被用户拒绝：${tc.name}`
+          messages.push(new ToolMessage({ content: errorMsg, tool_call_id: tc.id! }))
+          results.push({ type: 'tool_call', tool: tc.name, input, output: errorMsg })
+          writeAudit({ ...auditBase, decision: result.source === 'timeout' ? 'timeout' : 'deny', source: result.source, durationMs: Date.now() - auditStarted })
+          continue
+        }
+
+        if (result.remember) rememberApproval(tc.name, args)
+        auditDecision = 'approve'
+        auditSource = result.remember ? 'remember' : 'user'
+      } else {
+        // allow（策略放行或命中记忆）
+        auditDecision = decision.reason.includes('已记住') ? 'remembered' : 'allow'
+        auditSource = decision.reason
+      }
+    }
+
     try {
-      const outputStr = await invokeWithTimeout(tool, tc.args, signal)
+      const outputStr = await invokeWithTimeout(tool, tc.args, signal, TOOL_TIMEOUT_OVERRIDES[tool.name])
       // 提取图片块（完整保留，直接进对话流），回传 LLM 的文本剥离图片，避免 base64 撑爆上下文
       const { cleanText, images } = extractImageBlocks(outputStr)
       // 截断超长输出，避免 LLM 上下文溢出
@@ -101,6 +208,18 @@ async function executeToolCalls(
         : cleanText
       messages.push(new ToolMessage({ content: finalOutput, tool_call_id: tc.id! }))
       results.push({ type: 'tool_call', tool: tc.name, input, output: finalOutput, images })
+      if (securityContext) {
+        writeAudit({
+          conversationId: securityContext.conversationId,
+          agentType: securityContext.agentType,
+          toolName: tc.name,
+          argsSummary: summarizeArgs(tc.name, args),
+          risk: decision.risk,
+          decision: auditDecision as any,
+          source: auditSource,
+          durationMs: Date.now() - auditStarted
+        })
+      }
     } catch (err: any) {
       if (signal?.aborted) break
       const errorMsg = `工具执行失败: ${err.message || String(err)}`
@@ -110,6 +229,28 @@ async function executeToolCalls(
   }
 
   return { messages, results }
+}
+
+function safeParseArgs(raw: string): any {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return raw
+  }
+}
+
+// 让 promise 同时响应 abort：用户中断流时立即抛错返回，不悬挂等待
+function withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise
+  if (signal.aborted) return Promise.reject(new Error('Aborted'))
+  return new Promise((resolve, reject) => {
+    const onAbort = (): void => reject(new Error('Aborted'))
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(
+      (v) => { signal.removeEventListener('abort', onAbort); resolve(v) },
+      (e) => { signal.removeEventListener('abort', onAbort); reject(e) }
+    )
+  })
 }
 
 // Try Ollama as a last-resort fallback when cloud models are unavailable
@@ -286,8 +427,13 @@ export async function* streamChat(
     })
     messages.push(aiMsg)
 
-    // 执行工具
-    const { messages: toolMessages, results } = await executeToolCalls(parsedToolCalls, options.tools!, options.signal)
+    // 执行工具（带安全策略门）
+    const { messages: toolMessages, results } = await executeToolCalls(
+      parsedToolCalls,
+      options.tools!,
+      options.signal,
+      options.securityContext
+    )
 
     // Yield 工具调用结果给 UI；工具产生的图片先以 markdown 图片进入对话流
     for (const result of results) {

@@ -7,10 +7,10 @@ export class MessagesRepo {
     private notifySave: () => void
   ) {}
 
-  insert(msg: { id: string; conversation_id: string; role: string; agent_type: string | null; content: string; tokens: number; tool_calls?: string | null }): void {
+  insert(msg: { id: string; conversation_id: string; role: string; agent_type: string | null; content: string; tokens: number; tool_calls?: string | null; skill_triggers?: string | null }): void {
     this.db.run(
-      'INSERT INTO messages (id, conversation_id, role, agent_type, content, tokens, tool_calls) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [msg.id, msg.conversation_id, msg.role, msg.agent_type, msg.content, msg.tokens, msg.tool_calls ?? null]
+      'INSERT INTO messages (id, conversation_id, role, agent_type, content, tokens, tool_calls, skill_triggers) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [msg.id, msg.conversation_id, msg.role, msg.agent_type, msg.content, msg.tokens, msg.tool_calls ?? null, msg.skill_triggers ?? null]
     )
     this.notifySave()
   }
@@ -18,9 +18,9 @@ export class MessagesRepo {
   listByConversation(conversationId: string): Message[] {
     // ORDER BY rowid 保证插入顺序，避免 created_at（秒精度）相同时顺序不定
     // 否则 history.slice(0, -1) 可能排除错误的消息，导致 agent 丢失上下文
-    // 显式列名：tool_calls 由 ALTER TABLE 追加在末尾，不能用 SELECT * 按位置映射
+    // 显式列名：tool_calls / skill_triggers 由 ALTER TABLE 追加在末尾，不能用 SELECT * 按位置映射
     const results = this.db.exec(
-      'SELECT id, conversation_id, role, agent_type, content, tokens, created_at, tool_calls FROM messages WHERE conversation_id = ? ORDER BY rowid ASC',
+      'SELECT id, conversation_id, role, agent_type, content, tokens, created_at, tool_calls, skill_triggers FROM messages WHERE conversation_id = ? ORDER BY rowid ASC',
       [conversationId]
     )
     if (!results[0]) return []
@@ -32,7 +32,8 @@ export class MessagesRepo {
       content: row[4] as string,
       tokens: row[5] as number,
       created_at: row[6] as string,
-      tool_calls: row[7] as string | null
+      tool_calls: row[7] as string | null,
+      skill_triggers: row[8] as string | null
     }))
   }
 

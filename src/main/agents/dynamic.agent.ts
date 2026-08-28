@@ -5,6 +5,19 @@ import type { IAgent, AgentConfig, AgentState, StreamChunk, AgentContext, AgentS
 import { BaseAgent } from './base.agent'
 import type { Tool } from '@langchain/core/tools'
 
+// 安全解析 JSON 数组字符串：解析失败回退空数组，避免单条坏数据让构造器抛错
+// 进而中断整个自定义 Agent 注册循环。
+export function safeParseArray(raw: string | null | undefined): string[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    console.warn('[DynamicAgent] Malformed JSON array, falling back to []:', raw)
+    return []
+  }
+}
+
 export interface CustomAgentRow {
   id: string
   name: string
@@ -38,11 +51,11 @@ export class DynamicAgent extends BaseAgent {
       color: row.color,
       modelName: row.model_name || 'deepseek-chat',
       icon: row.icon || '🎯',
-      delegatesTo: JSON.parse(row.delegates_to || '[]'),
+      delegatesTo: safeParseArray(row.delegates_to),
       engine: (row.engine as 'deepseek' | 'pi') || 'deepseek'
     }
     this.systemPrompt = row.system_prompt
-    this.toolNames = JSON.parse(row.tools || '[]')
+    this.toolNames = safeParseArray(row.tools)
     this.setStateMachine(this.stateMachine)
   }
 

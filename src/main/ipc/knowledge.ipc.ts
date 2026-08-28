@@ -4,6 +4,7 @@ import { getEmbedding, isEmbeddingReady } from '../embedding'
 import { createChatModel } from '../llm'
 import { streamChat } from '../llm/stream-handler'
 import * as kb from '../database/kb'
+import { buildGraph, enrichDocuments } from '../graph/graph-builder'
 import { startImport, isImportRunning, type ImportSummary } from '../kb/import-manager'
 
 export type SearchResult = kb.KbSearchResult
@@ -264,6 +265,69 @@ export function registerKnowledgeIPC(mainWindow: BrowserWindow): void {
   ipcMain.handle('kb:ask', async (_event, question: string, tags?: string[]) => {
     const searchResults = await hybridSearch(question, { limit: 5, tags }).catch(() => searchChunks(question, 5, tags))
     if (searchResults.length === 0) return { answer: '未找到相关知识库内容。', sources: [] }
+
+    const ragContext = formatRagContext(searchResults)
+    const sources = searchResults.map((r) => ({ file_name: r.file_name, snippet: r.content.substring(0, 100) }))
+
+    try {
+      const llm = createChatModel()
+      const chunks: string[] = []
+      const stream = streamChat(llm, {
+        systemPrompt: '你是临智LINZ的知识库问答助手。请严格基于提供的知识库参考内容回答用户问题。如果参考内容不足以回答，请明确说明。回答时标注信息来源文件名。',
+        userMessage: question,
+        ragContext
+      })
+      for await (const chunk of stream) {
+        if (typeof chunk === 'string') chunks.push(chunk)
+      }
+      return { answer: chunks.join(''), sources }
+    } catch (err: any) {
+      return { answer: `检索到 ${searchResults.length} 条相关内容，但生成回答失败: ${err.message}`, sources }
+    }
+  })
+
+  // ============ 知识图谱 ============
+
+  // 构建图谱：相似度层（本地计算，一次返回全量带 weight 的候选边）+ 可选叠加 LLM 实体层
+  // 阈值过滤在前端做显隐切换，这里不传 threshold
+  ipcMain.handle('kb:graph:build', async (_event, options?: { includeEntities?: boolean }) => {
+    return buildGraph({
+      includeEntities: options?.includeEntities !== false
+    })
+  })
+
+  // 文档原文片段（节点详情"查看原文"）
+  ipcMain.handle('kb:graph:docChunks', async (_event, docId: string, limit?: number) => {
+    if (typeof docId !== 'string' || !docId) return []
+    return kb.getDocumentChunks(docId, typeof limit === 'number' ? limit : 20)
+  })
+
+  // LLM 实体/关系抽取（逐文档，进度推 kb:graph:enrichProgress）
+  ipcMain.handle('kb:graph:llmEnrich', async (event, docIds: string[]) => {
+    if (!Array.isArray(docIds) || docIds.length === 0) {
+      return { done: 0, skipped: 0, failed: 0, entityCount: 0 }
+    }
+    const ids = docIds.filter((id) => typeof id === 'string' && id.length > 0)
+    return enrichDocuments(ids, (p) => {
+      if (!event.sender.isDestroyed()) event.sender.send('kb:graph:enrichProgress', p)
+    })
+  })
+
+  // 清除 AI 增强层（指定文档或全部）
+  ipcMain.handle('kb:graph:clearEnrichment', async (_event, docIds?: string[]) => {
+    const ids = Array.isArray(docIds) ? docIds.filter((id) => typeof id === 'string' && id.length > 0) : undefined
+    kb.clearGraphEnrichment(ids)
+    return { success: true }
+  })
+
+  // 图谱内嵌问答：限定文档集合的 RAG
+  ipcMain.handle('kb:graph:ask', async (_event, question: string, docIds: string[]) => {
+    if (typeof question !== 'string' || !question.trim()) return { answer: '请输入问题。', sources: [] }
+    if (!Array.isArray(docIds) || docIds.length === 0) return { answer: '请先在图谱中选择至少一个文档节点。', sources: [] }
+    const ids = docIds.filter((id) => typeof id === 'string' && id.length > 0)
+
+    const searchResults = kb.searchInDocs(question, ids, 6)
+    if (searchResults.length === 0) return { answer: '所选文档中未找到与问题相关的内容。', sources: [] }
 
     const ragContext = formatRagContext(searchResults)
     const sources = searchResults.map((r) => ({ file_name: r.file_name, snippet: r.content.substring(0, 100) }))

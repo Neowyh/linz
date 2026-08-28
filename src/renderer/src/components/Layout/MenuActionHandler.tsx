@@ -4,6 +4,8 @@ import { useConversationStore } from '../../stores/conversationStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useChatStore } from '../../stores/chatStore'
+import { useDockStore } from '../../dock/dockStore'
+import type { PanelTypeId } from '../../dock/types'
 import { exportConversationByMenu } from '../../utils/exportChat'
 
 export type MenuAction =
@@ -15,7 +17,9 @@ export type MenuAction =
   | 'search-focus'
   | 'theme'
   | 'right-panel-toggle'
+  | 'left-panel-toggle'
   | 'right-panel-tab'
+  | 'open-panel'
   | 'navigate'
 
 // 监听主进程应用菜单（文件/编辑/视图/导航/帮助）发送的动作并分发到对应功能。
@@ -67,13 +71,24 @@ export default function MenuActionHandler(): null {
           break
         }
         case 'right-panel-toggle':
-          useUIStore.getState().toggleRightPanel()
+          useUIStore.getState().toggleCompanionPanes()
+          break
+        case 'left-panel-toggle':
+          useUIStore.getState().toggleLeftPanel()
           break
         case 'right-panel-tab': {
-          const tab = payload as 'home' | 'browser' | 'terminal'
-          if (tab === 'home' || tab === 'browser' || tab === 'terminal') {
-            useUIStore.getState().setRightPanelActiveTab(tab)
-            useUIStore.getState().setRightPanelOpen(true)
+          const tab = payload as 'browser' | 'terminal' | 'files'
+          if (tab === 'browser' || tab === 'terminal' || tab === 'files') {
+            useUIStore.getState().setCompanionPanesVisible(true)
+            useDockStore.getState().openPanelType(tab)
+          }
+          break
+        }
+        case 'open-panel': {
+          const type = payload as PanelTypeId
+          if (type) {
+            useUIStore.getState().setCompanionPanesVisible(true)
+            useDockStore.getState().openPanelType(type)
           }
           break
         }

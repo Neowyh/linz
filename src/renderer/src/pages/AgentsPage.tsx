@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Button, Tag, Empty, message, Popconfirm, Tabs } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined, UndoOutlined, AppstoreOutlined, ToolOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { PlusOutlined, EditOutlined, DeleteOutlined, UndoOutlined, AppstoreOutlined, ToolOutlined, ThunderboltOutlined, ImportOutlined, DownloadOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { useCustomAgentStore } from '../stores/customAgentStore'
 import { AGENT_NAMES, AGENT_COLORS, AGENT_ICONS } from '../types/agent'
@@ -11,6 +11,7 @@ import McpServersTab from '../components/McpServersTab'
 import ToolsOverviewTab from '../components/ToolsOverviewTab'
 import AgentSkillsTab from '../components/AgentSkillsTab'
 import AgentIcon from '../components/AgentIcon'
+import ImportAgentsModal, { type AgentImportCandidate } from '../components/ImportAgentsModal'
 
 const BUILTIN_DESCRIPTIONS: Record<BuiltinAgentType, string> = {
   orchestrator: '分析用户飞行器设计任务，调度专业 Agent 协同工作',
@@ -43,8 +44,14 @@ function AgentsListTab(): JSX.Element {
     agents, builtinAgents, loading,
     availableTools,
     fetchAgents, fetchBuiltinAgents, fetchAvailableTools,
-    deleteAgent, resetBuiltinAgent
+    deleteAgent, resetBuiltinAgent,
+    exportAgent, importParse, importConfirm
   } = useCustomAgentStore()
+
+  const [importOpen, setImportOpen] = useState(false)
+  const [importCandidates, setImportCandidates] = useState<AgentImportCandidate[]>([])
+  const [importErrors, setImportErrors] = useState<string[]>([])
+  const [importParsing, setImportParsing] = useState(false)
 
   useEffect(() => {
     fetchAgents()
@@ -80,6 +87,35 @@ function AgentsListTab(): JSX.Element {
     }
   }
 
+  const handleExport = async (agent: CustomAgentData): Promise<void> => {
+    const r = await exportAgent(agent.id)
+    if (r.success && r.filePath) {
+      message.success(`已导出到 ${r.filePath}`)
+    } else if (r.canceled) {
+      // 用户取消，静默
+    } else {
+      message.error(r.error || '导出失败')
+    }
+  }
+
+  const handleImportPick = async (): Promise<void> => {
+    setImportParsing(true)
+    try {
+      const paths = await window.aeromind.customAgent.importPick()
+      if (paths.length === 0) return
+      const { candidates, errors } = await importParse(paths)
+      setImportErrors(errors)
+      setImportCandidates(candidates)
+      if (candidates.length === 0 && errors.length === 0) {
+        message.warning('未在所选文件中找到可导入的 Agent')
+        return
+      }
+      setImportOpen(true)
+    } finally {
+      setImportParsing(false)
+    }
+  }
+
   const displayBuiltinAgents = builtinAgents.length > 0
     ? builtinAgents.map((a) => ({
         type: a.id,
@@ -101,13 +137,22 @@ function AgentsListTab(): JSX.Element {
     <div>
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold text-gray-900">Agent 管理</h2>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => navigate('/agents/new')}
-        >
-          创建 Agent
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            icon={<ImportOutlined />}
+            loading={importParsing}
+            onClick={handleImportPick}
+          >
+            导入 Agent
+          </Button>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => navigate('/agents/new')}
+          >
+            创建 Agent
+          </Button>
+        </div>
       </div>
 
       {loading ? (
@@ -237,6 +282,13 @@ function AgentsListTab(): JSX.Element {
                     icon={<EditOutlined />}
                     onClick={() => navigate(`/agents/${agent.id}/edit`)}
                   />
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<DownloadOutlined />}
+                    title="导出"
+                    onClick={() => handleExport(agent)}
+                  />
                   <Popconfirm
                     title="确定删除此自定义 Agent？"
                     onConfirm={() => handleDelete(agent.id)}
@@ -260,6 +312,14 @@ function AgentsListTab(): JSX.Element {
       {!loading && agents.length === 0 && displayBuiltinAgents.length === 0 && (
         <Empty description="暂无 Agent" />
       )}
+
+      <ImportAgentsModal
+        open={importOpen}
+        candidates={importCandidates}
+        errors={importErrors}
+        onClose={() => setImportOpen(false)}
+        onImported={() => { fetchAgents(); fetchBuiltinAgents() }}
+      />
     </div>
   )
 }

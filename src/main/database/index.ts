@@ -32,6 +32,7 @@ export interface Message {
   tokens: number
   created_at: string
   tool_calls: string | null  // JSON 序列化的 ToolCallEntry[]
+  skill_triggers: string | null  // JSON 序列化的 SkillTriggerInfo[]
 }
 
 // 保存数据库到磁盘
@@ -115,6 +116,17 @@ export async function initDatabase(customDbPath?: string): Promise<SqlJsDatabase
     console.warn('[Database] messages tool_calls migration skipped:', err)
   }
 
+  // 迁移：messages 表补 skill_triggers 列（结构化持久化技能触发记录，渲染端展示技能卡片）
+  try {
+    const msgSkillCols = db.exec("SELECT name FROM pragma_table_info('messages')")
+    if (msgSkillCols[0] && !msgSkillCols[0].values.some((r) => r[0] === 'skill_triggers')) {
+      db.run('ALTER TABLE messages ADD COLUMN skill_triggers TEXT')
+      console.log('[Database] messages 表新增 skill_triggers 列')
+    }
+  } catch (err) {
+    console.warn('[Database] messages skill_triggers migration skipped:', err)
+  }
+
   // 自动任务表
   db.run(`
     CREATE TABLE IF NOT EXISTS auto_tasks (
@@ -131,6 +143,23 @@ export async function initDatabase(customDbPath?: string): Promise<SqlJsDatabase
       created_at TEXT DEFAULT (datetime('now'))
     );
   `)
+
+  // 安全审计表（记录每个过门的工具调用及其决策，用于安全审计与排查）
+  db.run(`
+    CREATE TABLE IF NOT EXISTS security_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts INTEGER,
+      conversation_id TEXT,
+      agent_type TEXT,
+      tool_name TEXT,
+      args_summary TEXT,
+      risk TEXT,
+      decision TEXT,
+      source TEXT,
+      duration_ms INTEGER
+    );
+  `)
+  db.run(`CREATE INDEX IF NOT EXISTS idx_security_audit_ts ON security_audit(ts);`)
 
   // 模板表（提示词/任务模板，区别于 agent_skills 过程性知识技能）
   // 迁移：旧版本表名为 skills，重命名为 templates

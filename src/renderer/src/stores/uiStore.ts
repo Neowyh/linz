@@ -1,6 +1,7 @@
 import { create } from 'zustand'
+import { useDockStore } from '../dock/dockStore'
 
-export type RightPanelTab = 'home' | 'browser' | 'terminal'
+export type RightPanelTab = 'home' | 'browser' | 'terminal' | 'files'
 
 export interface PanelInstance {
   id: string
@@ -11,6 +12,16 @@ let instanceSeq = 0
 function genId(prefix: string): string {
   instanceSeq += 1
   return `${prefix}-${Date.now().toString(36)}-${instanceSeq}`
+}
+
+// 右侧工具面板显示状态持久化（配合 dock 布局一同记忆，重启后恢复用户选定的排布）
+const COMPANION_VISIBLE_KEY = 'linz.ui.companion.visible'
+function loadCompanionVisible(): boolean {
+  try {
+    return localStorage.getItem(COMPANION_VISIBLE_KEY) === '1'
+  } catch {
+    return false
+  }
 }
 
 function defaultTitle(kind: 'browser' | 'terminal', index: number): string {
@@ -24,6 +35,14 @@ interface UIState {
   rightPanelFullscreen: boolean
   isPanelResizing: boolean
 
+  leftPanelOpen: boolean
+
+  /** Dock 工作区：是否显示伴随窗格（对话锚点之外的浏览器/终端/文件/...） */
+  companionPanesVisible: boolean
+
+  // 跨页面"带上下文发起对话"的待发送提示词（知识图谱联动 → ChatPage 消费后清空）
+  pendingChatPrompt: string | null
+
   browserInstances: PanelInstance[]
   activeBrowserId: string | null
   terminalInstances: PanelInstance[]
@@ -35,6 +54,14 @@ interface UIState {
   setRightPanelWidth: (width: number) => void
   toggleFullscreen: () => void
   setPanelResizing: (v: boolean) => void
+
+  setLeftPanelOpen: (open: boolean) => void
+  toggleLeftPanel: () => void
+
+  setCompanionPanesVisible: (v: boolean) => void
+  toggleCompanionPanes: () => void
+
+  setPendingChatPrompt: (prompt: string | null) => void
 
   addBrowser: () => string
   removeBrowser: (id: string) => void
@@ -60,6 +87,9 @@ export const useUIStore = create<UIState>((set, get) => ({
   rightPanelWidth: DEFAULT_WIDTH,
   rightPanelFullscreen: false,
   isPanelResizing: false,
+  leftPanelOpen: true,
+  companionPanesVisible: loadCompanionVisible(),
+  pendingChatPrompt: null,
 
   browserInstances: [{ id: initialBrowserId, title: defaultTitle('browser', 1) }],
   activeBrowserId: initialBrowserId,
@@ -73,6 +103,23 @@ export const useUIStore = create<UIState>((set, get) => ({
     set({ rightPanelWidth: Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, width)) }),
   toggleFullscreen: () => set((state) => ({ rightPanelFullscreen: !state.rightPanelFullscreen })),
   setPanelResizing: (v) => set({ isPanelResizing: v }),
+
+  setLeftPanelOpen: (open) => set({ leftPanelOpen: open }),
+  toggleLeftPanel: () => set((state) => ({ leftPanelOpen: !state.leftPanelOpen })),
+
+  setCompanionPanesVisible: (v) => {
+    // 显示前确保 dock 布局里有可展示的窗格；否则曾关闭过的右侧面板会"点了没反应"
+    if (v) useDockStore.getState().restoreToolsPane()
+    set({ companionPanesVisible: v })
+  },
+  toggleCompanionPanes: () => {
+    const next = !get().companionPanesVisible
+    // 打开时若布局中已无任何辅助窗格，先恢复默认"工具"窗格（浏览器/终端/文件）
+    if (next) useDockStore.getState().restoreToolsPane()
+    set({ companionPanesVisible: next })
+  },
+
+  setPendingChatPrompt: (prompt) => set({ pendingChatPrompt: prompt }),
 
   addBrowser: () => {
     const id = genId('browser')

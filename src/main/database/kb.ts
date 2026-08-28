@@ -215,6 +215,29 @@ function createSchema(db: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_chunks_doc ON kb_chunks(document_id);
     CREATE VIRTUAL TABLE IF NOT EXISTS kb_chunks_fts USING fts5(content, tokenize='unicode61');
+    CREATE TABLE IF NOT EXISTS kb_graph_entities (
+      id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      entity_type TEXT,
+      document_id TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (id, document_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_kb_graph_entities_doc ON kb_graph_entities(document_id);
+    CREATE TABLE IF NOT EXISTS kb_graph_relations (
+      id TEXT NOT NULL,
+      source_entity TEXT NOT NULL,
+      target_entity TEXT NOT NULL,
+      relation_label TEXT NOT NULL,
+      document_id TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (id, document_id)
+    );
+    CREATE TABLE IF NOT EXISTS kb_graph_enrichment (
+      document_id TEXT PRIMARY KEY,
+      content_hash TEXT NOT NULL,
+      enriched_at TEXT DEFAULT (datetime('now'))
+    );
   `)
 }
 
@@ -312,18 +335,24 @@ export function deleteDocument(docId: string): void {
   deleteDocuments([docId])
 }
 
-// 批量删除：单事务清理 FTS 索引、chunks、文档记录
+// 批量删除：单事务清理 FTS 索引、chunks、文档记录（含图谱派生表；未开 FK pragma，手工级联）
 export function deleteDocuments(docIds: string[]): void {
   if (docIds.length === 0) return
   const db = getKbDatabase()
   const delFts = db.prepare('DELETE FROM kb_chunks_fts WHERE rowid IN (SELECT rowid FROM kb_chunks WHERE document_id = ?)')
   const delChunks = db.prepare('DELETE FROM kb_chunks WHERE document_id = ?')
   const delDoc = db.prepare('DELETE FROM kb_documents WHERE id = ?')
+  const delGraphEnt = db.prepare('DELETE FROM kb_graph_entities WHERE document_id = ?')
+  const delGraphRel = db.prepare('DELETE FROM kb_graph_relations WHERE document_id = ?')
+  const delGraphEnr = db.prepare('DELETE FROM kb_graph_enrichment WHERE document_id = ?')
   const tx = db.transaction((ids: string[]): void => {
     for (const id of ids) {
       delFts.run(id)
       delChunks.run(id)
       delDoc.run(id)
+      delGraphEnt.run(id)
+      delGraphRel.run(id)
+      delGraphEnr.run(id)
     }
   })
   tx(docIds)
@@ -334,8 +363,19 @@ export function deleteDocuments(docIds: string[]): void {
 // 标签只在导入/删除/编辑/切库时变化，缓存 + 失效即可（同一函数内定义避免循环引用问题）
 let tagsCache: string[] | null = null
 
+// 知识库变更监听：相似度图谱缓存等派生数据挂到这里，与标签缓存同生命周期失效。
+// 用回调注册而非直接 import graph-builder，避免 kb.ts ↔ graph-builder.ts 循环依赖。
+const kbChangeListeners: Array<() => void> = []
+
+export function onKbChange(fn: () => void): void {
+  kbChangeListeners.push(fn)
+}
+
 function invalidateTagsCache(): void {
   tagsCache = null
+  for (const fn of kbChangeListeners) {
+    try { fn() } catch { /* ignore listener errors */ }
+  }
 }
 
 // 列表查询用显式列名（列表不需要 embedding 等大字段；未来表加列也不会被 SELECT * 带出）
@@ -504,4 +544,168 @@ export function migrateLegacyKb(sqlDb: SqlJsDatabase): number {
   tx()
   console.log('[KB] Legacy migration done')
   return legacyDocs.length
+}
+
+// ============ 知识图谱 ============
+
+// 供图谱构建的已完成文档行（复用显式列名常量，避免 SELECT *）
+export function listGraphDocuments(): KbDocumentRow[] {
+  return getKbDatabase()
+    .prepare(`SELECT ${DOCUMENT_LIST_COLUMNS} FROM kb_documents WHERE index_status = 'done' ORDER BY added_at DESC`)
+    .all() as KbDocumentRow[]
+}
+
+// 文档词频向量：采样前 maxChunks 个 chunk、累计 maxChars 字符，bigram 分词计数后保留 topTerms 个高频词。
+// 与 FTS 索引用同一 toBigramTokens，向量与检索语义一致；截断为大库性能兜底。
+export function getDocumentTermVectors(maxChunks = 30, maxChars = 20000, topTerms = 40): Array<{ docId: string; terms: Map<string, number> }> {
+  const rows = getKbDatabase()
+    .prepare(`
+      SELECT document_id, content FROM kb_chunks
+      WHERE document_id IN (SELECT id FROM kb_documents WHERE index_status = 'done')
+      ORDER BY document_id, chunk_index
+    `)
+    .all() as Array<{ document_id: string; content: string }>
+
+  const byDoc = new Map<string, { chunks: number; chars: number; tf: Map<string, number> }>()
+  for (const row of rows) {
+    let acc = byDoc.get(row.document_id)
+    if (!acc) {
+      acc = { chunks: 0, chars: 0, tf: new Map() }
+      byDoc.set(row.document_id, acc)
+    }
+    if (acc.chunks >= maxChunks || acc.chars >= maxChars) continue
+    acc.chunks++
+    acc.chars += row.content.length
+    for (const token of toBigramTokens(row.content)) {
+      acc.tf.set(token, (acc.tf.get(token) || 0) + 1)
+    }
+  }
+
+  const result: Array<{ docId: string; terms: Map<string, number> }> = []
+  for (const [docId, acc] of byDoc) {
+    const sorted = Array.from(acc.tf.entries()).sort((a, b) => b[1] - a[1]).slice(0, topTerms)
+    result.push({ docId, terms: new Map(sorted) })
+  }
+  return result
+}
+
+// 限定文档集合的 FTS 检索（图谱内嵌问答用）：searchFts 变体，追加 document_id IN 过滤
+export function searchInDocs(query: string, docIds: string[], limit = 6): KbSearchResult[] {
+  if (docIds.length === 0) return []
+  const rawTerms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 0)
+  if (rawTerms.length === 0) return []
+
+  const ftsQuery = buildFtsQuery(expandQueryTerms(rawTerms))
+  if (!ftsQuery) return []
+
+  const placeholders = docIds.map(() => '?').join(',')
+  const sql = `
+    SELECT c.content, c.document_id, d.file_name, -bm25(kb_chunks_fts) AS score
+    FROM kb_chunks_fts
+    JOIN kb_chunks c ON c.rowid = kb_chunks_fts.rowid
+    JOIN kb_documents d ON d.id = c.document_id
+    WHERE kb_chunks_fts MATCH ? AND c.document_id IN (${placeholders})
+    ORDER BY score DESC
+    LIMIT ?
+  `
+  try {
+    return getKbDatabase().prepare(sql).all(ftsQuery, ...docIds, limit) as KbSearchResult[]
+  } catch (err) {
+    console.warn('[KB] searchInDocs failed:', err)
+    return []
+  }
+}
+
+// 文档原文片段（节点详情"查看原文" / LLM 增强采样用）
+export function getDocumentChunks(docId: string, limit = 20): Array<{ content: string; chunk_index: number }> {
+  return getKbDatabase()
+    .prepare('SELECT content, chunk_index FROM kb_chunks WHERE document_id = ? ORDER BY chunk_index LIMIT ?')
+    .all(docId, limit) as Array<{ content: string; chunk_index: number }>
+}
+
+// 单文档全部 chunk（LLM 增强需自首/中/末采样，不受 LIMIT 截断影响）
+export function getAllChunkContents(docId: string): string[] {
+  const rows = getKbDatabase()
+    .prepare('SELECT content FROM kb_chunks WHERE document_id = ? ORDER BY chunk_index')
+    .all(docId) as Array<{ content: string }>
+  return rows.map((r) => r.content)
+}
+
+export interface KbGraphEntityRow {
+  id: string
+  name: string
+  entity_type: string | null
+  document_id: string
+}
+
+export interface KbGraphRelationRow {
+  id: string
+  source_entity: string
+  target_entity: string
+  relation_label: string
+  document_id: string
+}
+
+export function listGraphEntities(): KbGraphEntityRow[] {
+  return getKbDatabase()
+    .prepare('SELECT id, name, entity_type, document_id FROM kb_graph_entities')
+    .all() as KbGraphEntityRow[]
+}
+
+export function listGraphRelations(): KbGraphRelationRow[] {
+  return getKbDatabase()
+    .prepare('SELECT id, source_entity, target_entity, relation_label, document_id FROM kb_graph_relations')
+    .all() as KbGraphRelationRow[]
+}
+
+// 单文档 LLM 抽取结果整体替换：先删旧再插新，单事务
+export function replaceGraphDataForDoc(
+  docId: string,
+  entities: Array<{ id: string; name: string; entityType: string }>,
+  relations: Array<{ id: string; sourceEntity: string; targetEntity: string; label: string }>,
+  contentHash: string
+): void {
+  const db = getKbDatabase()
+  const delEnt = db.prepare('DELETE FROM kb_graph_entities WHERE document_id = ?')
+  const delRel = db.prepare('DELETE FROM kb_graph_relations WHERE document_id = ?')
+  const insEnt = db.prepare('INSERT OR IGNORE INTO kb_graph_entities (id, name, entity_type, document_id) VALUES (?, ?, ?, ?)')
+  const insRel = db.prepare('INSERT OR IGNORE INTO kb_graph_relations (id, source_entity, target_entity, relation_label, document_id) VALUES (?, ?, ?, ?, ?)')
+  const upsertEnr = db.prepare(`
+    INSERT INTO kb_graph_enrichment (document_id, content_hash, enriched_at) VALUES (?, ?, datetime('now'))
+    ON CONFLICT(document_id) DO UPDATE SET content_hash = excluded.content_hash, enriched_at = excluded.enriched_at
+  `)
+  const tx = db.transaction((): void => {
+    delEnt.run(docId)
+    delRel.run(docId)
+    for (const e of entities) insEnt.run(e.id, e.name, e.entityType, docId)
+    for (const r of relations) insRel.run(r.id, r.sourceEntity, r.targetEntity, r.label, docId)
+    upsertEnr.run(docId, contentHash)
+  })
+  tx()
+}
+
+export function getEnrichmentHash(docId: string): string | undefined {
+  const row = getKbDatabase()
+    .prepare('SELECT content_hash FROM kb_graph_enrichment WHERE document_id = ?')
+    .get(docId) as { content_hash: string } | undefined
+  return row?.content_hash
+}
+
+// 清除 AI 增强层：指定文档或全部
+export function clearGraphEnrichment(docIds?: string[]): void {
+  const db = getKbDatabase()
+  if (docIds && docIds.length > 0) {
+    const placeholders = docIds.map(() => '?').join(',')
+    const tx = db.transaction((): void => {
+      db.prepare(`DELETE FROM kb_graph_entities WHERE document_id IN (${placeholders})`).run(...docIds)
+      db.prepare(`DELETE FROM kb_graph_relations WHERE document_id IN (${placeholders})`).run(...docIds)
+      db.prepare(`DELETE FROM kb_graph_enrichment WHERE document_id IN (${placeholders})`).run(...docIds)
+    })
+    tx()
+  } else {
+    const tx = db.transaction((): void => {
+      db.exec('DELETE FROM kb_graph_entities; DELETE FROM kb_graph_relations; DELETE FROM kb_graph_enrichment;')
+    })
+    tx()
+  }
 }

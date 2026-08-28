@@ -10,6 +10,8 @@ import {
 } from '@ant-design/icons'
 import { useUIStore } from '../../stores/uiStore'
 import { registerWebview, unregisterWebview, getWebviewHandler } from './webviewRegistry'
+import { usePanelCommandStore } from '../../stores/panelCommandStore'
+import { isPane, useDockStore } from '../../dock/dockStore'
 
 const HOME_URL = 'https://www.bing.com'
 
@@ -65,6 +67,19 @@ function createTabId(): string {
   return `browser-tab-${Date.now()}-${tabIdCounter}`
 }
 
+// 判断本浏览器实例当前是否可见：其 instanceId 是某个窗格的激活页签。
+// 多实例 + keep-alive 下隐藏实例的 webview 也会 attach，只有可见实例才允许向主进程上报激活 guest
+function isBrowserInstanceVisible(instanceId: string): boolean {
+  const { layout } = useDockStore.getState()
+  for (const key of Object.keys(layout.byId)) {
+    const n = layout.byId[key]
+    if (!isPane(n) || !n.activeTabId) continue
+    const tab = n.tabs.find((t) => t.id === n.activeTabId)
+    if (tab && tab.instanceId === instanceId) return true
+  }
+  return false
+}
+
 const SCROLLBAR_CSS = `
 ::-webkit-scrollbar {
   width: 12px !important;
@@ -91,7 +106,12 @@ html, body {
 }
 `
 
-export default function BrowserPanel(): JSX.Element {
+export default function BrowserPanel({
+  instanceId
+}: {
+  instanceId: string
+  panelType: string
+}): JSX.Element {
   const isResizing = useUIStore((s) => s.isPanelResizing)
 
   const initialTabRef = useRef<TabState | null>(null)
@@ -124,6 +144,17 @@ export default function BrowserPanel(): JSX.Element {
   useEffect(() => {
     activeTabIdRef.current = activeTabId
   }, [activeTabId])
+
+  // 主进程 browser 工具协作：上报本实例当前激活浏览器页签的 guestId。
+  // 不可见实例一律上报 null（避免隐藏实例抢占激活）；主进程"最后上报者优先"，
+  // 且每次动作前会重新校验存活 + http(s)，null 上报不会破坏正确性。
+  const reportActiveTabToMain = useCallback(() => {
+    if (!isBrowserInstanceVisible(instanceId)) {
+      window.aeromind.browser.reportActiveTab(null)
+      return
+    }
+    window.aeromind.browser.reportActiveTab(guestIdsByTab.current.get(activeTabIdRef.current) ?? null)
+  }, [instanceId])
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0]
 
@@ -186,6 +217,8 @@ export default function BrowserPanel(): JSX.Element {
         guestIdsByTab.current.set(tabId, guestId)
         // 主进程 window.open 事件 → guestId → 回到本页签所在面板新建标签页
         registerWebview(guestId, (url) => openNewTab(url))
+        // 主进程 browser 工具协作：webview 挂载（含面板隐藏→显示的重新挂载）后上报激活 guest
+        reportActiveTabToMain()
       } catch {
         // 忽略
       }
@@ -244,14 +277,26 @@ export default function BrowserPanel(): JSX.Element {
     return () => {
       guestIdsByTab.current.forEach((guestId) => unregisterWebview(guestId))
       guestIdsByTab.current.clear()
+      // 主进程 browser 工具协作：清空激活上报（主进程兜底校验存活页签，不影响其他实例）
+      window.aeromind.browser.reportActiveTab(null)
     }
   }, [])
 
-  // 切换激活页签时同步地址栏
+  // 主进程 browser 工具协作：dock 布局变化（本实例显隐/移动/被切到前台）时同步上报激活 guest。
+  // 覆盖"隐藏 keep-alive 实例被切到前台"这类没有 did-attach 的状态变化。
+  useEffect(() => {
+    reportActiveTabToMain()
+    return useDockStore.subscribe((state, prev) => {
+      if (state.layout !== prev.layout) reportActiveTabToMain()
+    })
+  }, [reportActiveTabToMain])
+
+  // 切换激活页签时同步地址栏 + 上报主进程激活 guest
   useEffect(() => {
     const tab = tabsRef.current.find((t) => t.id === activeTabId)
     if (tab) setInputUrl(tab.url)
-  }, [activeTabId])
+    reportActiveTabToMain()
+  }, [activeTabId, reportActiveTabToMain])
 
   const handleNavigate = useCallback((rawUrl: string) => {
     const url = normalizeUrl(rawUrl)
@@ -263,6 +308,39 @@ export default function BrowserPanel(): JSX.Element {
     setTabs((prev) => prev.map((t) => (t.id === tabId ? { ...t, src: url, url } : t)))
     setInputUrl(url)
   }, [])
+
+  // 始终拿到最新 handleNavigate，避免命令订阅 effect 的 stale closure
+  const handleNavigateRef = useRef(handleNavigate)
+  handleNavigateRef.current = handleNavigate
+
+  // 对话→面板联动：订阅 panelCommandStore 里属于 browser 面板的命令，
+  // 收到 navigate/open action 时按 payload.url 导航到当前激活页签。
+  // （命令已在 dispatch 时由 openPanelType 自动打开/聚焦了 browser 面板）
+  useEffect(() => {
+    const handled = new Set<string>()
+    const unsub = usePanelCommandStore.subscribe((state, prev) => {
+      if (state.pending === prev.pending) return
+      for (const cmd of state.pending) {
+        if (cmd.panelType !== 'browser') continue
+        if (cmd.instanceId && cmd.instanceId !== instanceId) continue
+        if (cmd.action !== 'navigate' && cmd.action !== 'open' && cmd.action !== 'load') continue
+        if (handled.has(cmd.id)) continue
+        handled.add(cmd.id)
+        const url = typeof cmd.payload.url === 'string' ? cmd.payload.url : ''
+        const target = typeof cmd.payload.target === 'string' ? cmd.payload.target : undefined
+        if (!url) {
+          usePanelCommandStore.getState().consume(cmd.id)
+          continue
+        }
+        // payload.target='new' → 新标签页；否则导航到当前激活页签
+        if (target === 'new') openNewTab(url)
+        else handleNavigateRef.current(url)
+        usePanelCommandStore.getState().consume(cmd.id)
+      }
+    })
+    return () => unsub()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instanceId, openNewTab])
 
   const handleBack = useCallback(() => {
     webviewRefs.current.get(activeTabIdRef.current)?.goBack()

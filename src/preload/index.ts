@@ -41,8 +41,7 @@ const api = {
   },
 
   agent: {
-    onStatusUpdate: (callback: (data: any) => void): (() => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, data: any): void => {
+    onStatusUpdate: (callback: (data: any) => void): (() => void) => {      const handler = (_event: Electron.IpcRendererEvent, data: any): void => {
         callback(data)
       }
       ipcRenderer.on('agent:statusUpdate', handler)
@@ -94,6 +93,18 @@ const api = {
     },
     resetBuiltin: (id: string): Promise<{ success: boolean; error?: string }> => {
       return ipcRenderer.invoke('agent:resetBuiltin', id)
+    },
+    exportAgent: (id: string): Promise<{ success: boolean; filePath?: string; canceled?: boolean; error?: string }> => {
+      return ipcRenderer.invoke('agent:exportAgent', id)
+    },
+    importPick: (): Promise<string[]> => {
+      return ipcRenderer.invoke('agent:importPick')
+    },
+    importParse: (paths: string[]): Promise<{ candidates: any[]; errors: string[] }> => {
+      return ipcRenderer.invoke('agent:importParse', paths)
+    },
+    importConfirm: (items: any[]): Promise<{ success: boolean; imported: number; names: string[]; errors?: string[] }> => {
+      return ipcRenderer.invoke('agent:importConfirm', items)
     }
   },
 
@@ -277,6 +288,30 @@ const api = {
     },
     generateEmbeddings: (): Promise<{ success: boolean; embedded?: number; error?: string }> => {
       return ipcRenderer.invoke('kb:generateEmbeddings')
+    },
+    graphBuild: (options?: { threshold?: number; includeEntities?: boolean }): Promise<any> => {
+      return ipcRenderer.invoke('kb:graph:build', options)
+    },
+    graphDocChunks: (docId: string, limit?: number): Promise<Array<{ content: string; chunk_index: number }>> => {
+      return ipcRenderer.invoke('kb:graph:docChunks', docId, limit)
+    },
+    graphLlmEnrich: (docIds: string[]): Promise<{ done: number; skipped: number; failed: number; entityCount: number }> => {
+      return ipcRenderer.invoke('kb:graph:llmEnrich', docIds)
+    },
+    graphClearEnrichment: (docIds?: string[]): Promise<{ success: boolean }> => {
+      return ipcRenderer.invoke('kb:graph:clearEnrichment', docIds)
+    },
+    graphAsk: (question: string, docIds: string[]): Promise<{ answer: string; sources: Array<{ file_name: string; snippet: string }> }> => {
+      return ipcRenderer.invoke('kb:graph:ask', question, docIds)
+    },
+    onGraphEnrichProgress: (callback: (data: any) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: any): void => {
+        callback(data)
+      }
+      ipcRenderer.on('kb:graph:enrichProgress', handler)
+      return () => {
+        ipcRenderer.removeListener('kb:graph:enrichProgress', handler)
+      }
     }
   },
 
@@ -376,6 +411,12 @@ const api = {
     rename: (id: string, name: string): Promise<{ success: boolean }> => {
       return ipcRenderer.invoke('workspace:rename', id, name)
     },
+    getFolder: (): Promise<{ folder: string }> => {
+      return ipcRenderer.invoke('workspace:getFolder')
+    },
+    setFolder: (folder: string): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke('workspace:setFolder', folder)
+    },
     onChanged: (callback: (id: string) => void): (() => void) => {
       const handler = (_event: Electron.IpcRendererEvent, id: string): void => {
         callback(id)
@@ -384,6 +425,33 @@ const api = {
       return () => {
         ipcRenderer.removeListener('workspace:changed', handler)
       }
+    }
+  },
+
+  files: {
+    getRoot: (): Promise<{ root: string | null }> => {
+      return ipcRenderer.invoke('fileBrowser:getRoot')
+    },
+    list: (relPath?: string): Promise<{ entries: any[] } | { error: string }> => {
+      return ipcRenderer.invoke('fileBrowser:list', relPath)
+    },
+    read: (relPath: string): Promise<any> => {
+      return ipcRenderer.invoke('fileBrowser:read', relPath)
+    },
+    readBinary: (relPath: string): Promise<{ data: string; size: number } | { error: string }> => {
+      return ipcRenderer.invoke('fileBrowser:readBinary', relPath)
+    },
+    openExternal: (relPath: string): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke('fileBrowser:openExternal', relPath)
+    },
+    reveal: (relPath: string): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke('fileBrowser:reveal', relPath)
+    }
+  },
+
+  step: {
+    readMesh: (relPath: string): Promise<any> => {
+      return ipcRenderer.invoke('step:readMesh', relPath)
     }
   },
 
@@ -438,6 +506,18 @@ const api = {
       return () => {
         ipcRenderer.removeListener('browser:openInNewTab', handler)
       }
+    },
+    // 主进程 browser 工具请求打开/聚焦浏览器面板（App.tsx 常驻监听）
+    onOpenPanel: (callback: () => void): (() => void) => {
+      const handler = (): void => callback()
+      ipcRenderer.on('browser:openPanel', handler)
+      return () => {
+        ipcRenderer.removeListener('browser:openPanel', handler)
+      }
+    },
+    // BrowserPanel 上报当前激活页签的 guestId（供主进程 browser 工具定位 webview）
+    reportActiveTab: (guestId: number | null): void => {
+      ipcRenderer.send('browser:activeTab', guestId)
     }
   },
 
@@ -471,6 +551,63 @@ const api = {
       return () => {
         ipcRenderer.removeListener('terminal:exit', handler)
       }
+    }
+  },
+
+  approval: {
+    onRequest: (callback: (data: any) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: any): void => {
+        callback(data)
+      }
+      ipcRenderer.on('approval:request', handler)
+      return () => {
+        ipcRenderer.removeListener('approval:request', handler)
+      }
+    },
+    respond: (requestId: string, decision: 'approve' | 'deny', remember: boolean): Promise<boolean> => {
+      return ipcRenderer.invoke('approval:respond', { requestId, decision, remember })
+    }
+  },
+
+  security: {
+    listRisks: (): Promise<Record<string, string>> => {
+      return ipcRenderer.invoke('security:listRisks')
+    },
+    getMode: (): Promise<'default' | 'full'> => {
+      return ipcRenderer.invoke('security:getMode')
+    },
+    setMode: (mode: 'default' | 'full'): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke('security:setMode', mode)
+    },
+    listPolicies: (): Promise<Record<string, 'allow' | 'ask' | 'deny'>> => {
+      return ipcRenderer.invoke('security:listPolicies')
+    },
+    setPolicy: (toolName: string, action: 'allow' | 'ask' | 'deny' | null): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke('security:setPolicy', toolName, action)
+    },
+    listRemembered: (): Promise<Array<{ fingerprint: string; toolName: string; argsSummary: string; ts: number }>> => {
+      return ipcRenderer.invoke('security:listRemembered')
+    },
+    forgetRemembered: (fingerprint: string): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke('security:forgetRemembered', fingerprint)
+    },
+    listAudit: (limit?: number): Promise<any[]> => {
+      return ipcRenderer.invoke('security:listAudit', limit)
+    },
+    clearAudit: (): Promise<{ success: boolean }> => {
+      return ipcRenderer.invoke('security:clearAudit')
+    },
+    listProtected: (): Promise<string[]> => {
+      return ipcRenderer.invoke('security:listProtected')
+    },
+    addProtected: (p: string): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke('security:addProtected', p)
+    },
+    removeProtected: (p: string): Promise<{ success: boolean }> => {
+      return ipcRenderer.invoke('security:removeProtected', p)
+    },
+    pickProtectedDirectory: (): Promise<string | null> => {
+      return ipcRenderer.invoke('security:pickProtectedDirectory')
     }
   },
 

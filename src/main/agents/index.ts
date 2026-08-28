@@ -122,7 +122,18 @@ export function initAgentEngine(): AgentEngine {
 
 export function getAgentEngine(): AgentEngine | null {
   const config = getLLMConfig()
-  if (!config.apiKey) return null
+
+  // 闸门不再仅看 DeepSeek apiKey：
+  // - 有 DeepSeek key → 总是可用（DeepSeek + 可能的 Pi/Ollama fallback）
+  // - 无 DeepSeek key 但 Ollama 启用 → 可用（Pi 路径下 Ollama 作主模型，DeepSeek 路径作 fallback）
+  // - 两者皆无 → 不可用
+  // 注意：内置 general agent 在 DB seed 为 engine='pi'，其 runWithPi() 会在无 DeepSeek key 时
+  // 抛 "DeepSeek API key not configured"——此时 Ollama fallback 接管（见 pi/agent-runner.ts）。
+  // 故只要 Ollama 启用，即使无 DeepSeek key 也应放行，否则 Pi/Ollama-only 用户被锁死。
+  if (!config.apiKey) {
+    const ollama = getAppConfig().get('ollama')
+    if (!ollama?.enabled) return null
+  }
 
   if (!agentEngine) {
     agentEngine = new AgentEngine()

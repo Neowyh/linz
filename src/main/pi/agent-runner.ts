@@ -208,6 +208,9 @@ async function* driveSession(
         return
       }
       // 主模型重试耗尽 → 尝试 Ollama fallback
+      // ⚠️ 已知割裂：此 fallback 走 Pi 的 getOllamaModelContext；而协同模式下 orchestrator 自身的
+      // fallback 走 LangChain createOllamaModel（见 orchestrator.agent.ts 注释）。二者独立。
+      // Phase B 统一 Pi 引擎后此割裂消失。
       console.warn(`[PiRunner] Primary prompt failed after retries, trying Ollama fallback:`, err?.message || err)
       const ollamaOk = await canUseOllama()
       if (!ollamaOk) {

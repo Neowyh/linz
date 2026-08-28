@@ -3,10 +3,21 @@ import { v4 as uuidv4 } from 'uuid'
 import { useChatStore } from '../stores/chatStore'
 import { useConversationStore } from '../stores/conversationStore'
 import { useAgentStore } from '../stores/agentStore'
-import type { ToolCallEntry } from '../types/chat'
+import type { ToolCallEntry, SkillTriggerInfo } from '../types/chat'
 
 // 解析 DB 中持久化的 tool_calls JSON；旧数据或解析失败返回 undefined
 function parseToolCalls(raw: string | null | undefined): ToolCallEntry[] | undefined {
+  if (!raw) return undefined
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// 解析 DB 中持久化的 skill_triggers JSON；旧数据或解析失败返回 undefined
+function parseSkillTriggers(raw: string | null | undefined): SkillTriggerInfo[] | undefined {
   if (!raw) return undefined
   try {
     const parsed = JSON.parse(raw)
@@ -20,6 +31,7 @@ export function useChat() {
   const conversationId = useChatStore((s) => s.conversationId)
   const isStreaming = useChatStore((s) => s.isStreaming)
   const addUserMessage = useChatStore((s) => s.addUserMessage)
+  const startStreaming = useChatStore((s) => s.startStreaming)
   const setConversation = useChatStore((s) => s.setConversation)
   const fetchConversations = useConversationStore((s) => s.fetchConversations)
   const incrementActiveTasks = useAgentStore((s) => s.incrementActiveTasks)
@@ -29,8 +41,16 @@ export function useChat() {
   const streamingConvIdRef = useRef<string | null>(null)
 
   // 监听流结束事件（替代轮询）
+  // 主进程在旧流被新流抢占时仍会发 streamEnd（带旧 conversationId），
+  // 这里按 conversationId 过滤：只结束当前对话的流式状态，避免跨对话竞态把新流抹掉。
   useEffect(() => {
-    const unsubscribe = window.aeromind.chat.onStreamEnd(() => {
+    const unsubscribe = window.aeromind.chat.onStreamEnd((data: { conversationId?: string }) => {
+      const endedConvId = data?.conversationId
+      const currentConvId = useChatStore.getState().conversationId
+      if (endedConvId && currentConvId && endedConvId !== currentConvId) {
+        // 旧对话的 streamEnd，当前对话仍在流式，忽略
+        return
+      }
       incrementCompletedTasks()
       fetchConversations()
       streamingConvIdRef.current = null
@@ -52,13 +72,16 @@ export function useChat() {
       const userMsgId = uuidv4()
       addUserMessage(userMsgId, content)
 
+      // 立即置为流式等待状态：模型首个 chunk 到达前，对话底部即显示"动态等待标志"
+      startStreaming(userMsgId)
+
       // 通知主进程处理，携带当前选择的 agent 与调度模式
       const { selectedAgent, dispatchMode } = useChatStore.getState()
       window.aeromind.chat.sendMessage(convId, content, selectedAgent, dispatchMode, skillIds)
       incrementActiveTasks()
       streamingConvIdRef.current = convId
     },
-    [conversationId, addUserMessage, setConversation, incrementActiveTasks]
+    [conversationId, addUserMessage, startStreaming, setConversation, incrementActiveTasks]
   )
 
   const abort = useCallback(() => {
@@ -76,6 +99,7 @@ export function useChat() {
           agentType: (msg.agent_type as any) || undefined,
           content: msg.content,
           toolCalls: parseToolCalls((msg as any).tool_calls),
+          skillTriggers: parseSkillTriggers((msg as any).skill_triggers),
           isStreaming: false,
           createdAt: msg.created_at
         }))

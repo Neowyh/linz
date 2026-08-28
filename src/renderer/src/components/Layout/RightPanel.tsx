@@ -1,15 +1,17 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, useState } from 'react'
 import {
   CloseOutlined,
   GlobalOutlined,
   CodeOutlined,
   FullscreenOutlined,
   FullscreenExitOutlined,
-  PlusOutlined
+  PlusOutlined,
+  FolderOpenOutlined
 } from '@ant-design/icons'
-import { useUIStore, RIGHT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH, type PanelInstance } from '../../stores/uiStore'
+import { useUIStore, RIGHT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH, type PanelInstance, type RightPanelTab } from '../../stores/uiStore'
 import BrowserPanel from '../RightPanel/BrowserPanel'
 import TerminalPanel from '../RightPanel/TerminalPanel'
+import FilePanel from '../RightPanel/FilePanel'
 
 interface InstanceTabsProps {
   instances: PanelInstance[]
@@ -137,6 +139,18 @@ export default function RightPanel(): JSX.Element | null {
     }
   }, [])
 
+  // 记录本面板生命周期内已访问过的 tab：首次访问后即保持挂载（keep-alive），
+  // 切走时仅 display:none 隐藏，保留浏览器 URL/历史、终端 PTY 会话、文件树状态。
+  const [visitedTabs, setVisitedTabs] = useState<RightPanelTab[]>([])
+  useEffect(() => {
+    if (!open) {
+      setVisitedTabs([])
+      return
+    }
+    if (activeTab === 'home') return
+    setVisitedTabs((prev) => (prev.includes(activeTab) ? prev : [...prev, activeTab]))
+  }, [open, activeTab])
+
   if (!open) {
     return <div className="w-0 min-w-0 overflow-hidden" />
   }
@@ -181,6 +195,16 @@ export default function RightPanel(): JSX.Element | null {
             }`}
           >
             <CodeOutlined /> 终端
+          </button>
+          <button
+            onClick={() => setActiveTab('files')}
+            className={`px-3 py-1.5 text-xs flex items-center gap-1.5 rounded transition-colors ${
+              activeTab === 'files'
+                ? 'text-primary border-b-2 border-primary'
+                : 'text-gray-500 hover:text-gray-700 border-b-2 border-transparent'
+            }`}
+          >
+            <FolderOpenOutlined /> 文件
           </button>
         </div>
         <div className="flex items-center gap-1">
@@ -242,29 +266,45 @@ export default function RightPanel(): JSX.Element | null {
                 <div className="text-sm font-medium text-gray-800">终端</div>
                 <div className="text-[11px] text-gray-500 text-center px-2">运行命令与脚本</div>
               </button>
+              <button
+                onClick={() => setActiveTab('files')}
+                className="w-[180px] h-[140px] rounded-card border border-gray-200 hover:border-primary hover:shadow-md cursor-pointer transition-all flex flex-col items-center justify-center gap-2 bg-white"
+              >
+                <FolderOpenOutlined className="text-3xl text-primary" />
+                <div className="text-sm font-medium text-gray-800">文件管理</div>
+                <div className="text-[11px] text-gray-500 text-center px-2">浏览工作空间文件并预览</div>
+              </button>
             </div>
           </div>
         )}
-        {showBrowserTabs &&
+        {/* 浏览区：首次访问后保持挂载，非活动 tab/实例仅隐藏 */}
+        {visitedTabs.includes('browser') &&
           browserInstances.map((inst) => (
             <div
               key={inst.id}
               className="absolute inset-0"
-              style={{ display: inst.id === activeBrowserId ? 'block' : 'none' }}
+              style={{ display: activeTab === 'browser' && inst.id === activeBrowserId ? 'block' : 'none' }}
             >
               <BrowserPanel key={inst.id} />
             </div>
           ))}
-        {showTerminalTabs &&
+        {/* 终端区：同上，切走时不卸载，PTY 会话保持存活 */}
+        {visitedTabs.includes('terminal') &&
           terminalInstances.map((inst) => (
             <div
               key={inst.id}
               className="absolute inset-0"
-              style={{ display: inst.id === activeTerminalId ? 'block' : 'none' }}
+              style={{ display: activeTab === 'terminal' && inst.id === activeTerminalId ? 'block' : 'none' }}
             >
               <TerminalPanel key={inst.id} />
             </div>
           ))}
+        {/* 文件区：包一层 absolute inset-0，与其余面板一致，隐藏时不参与布局 */}
+        {visitedTabs.includes('files') && (
+          <div className="absolute inset-0" style={{ display: activeTab === 'files' ? 'block' : 'none' }}>
+            <FilePanel />
+          </div>
+        )}
         {((showBrowserTabs && browserInstances.length === 0) ||
           (showTerminalTabs && terminalInstances.length === 0)) && (
           <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-3">

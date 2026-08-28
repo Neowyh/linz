@@ -1,13 +1,15 @@
 import { useEffect, useCallback, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { message, Dropdown } from 'antd'
-import { FileTextOutlined, FileWordOutlined, FilePdfOutlined, LayoutOutlined } from '@ant-design/icons'
+import { FileTextOutlined, FileWordOutlined, FilePdfOutlined } from '@ant-design/icons'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useUIStore } from '../stores/uiStore'
 import { useChat } from '../hooks/useChat'
 import ChatInput from '../components/Chat/ChatInput'
 import MessageList from '../components/Chat/MessageList'
+import LayoutPresetDropdown from '../components/Chat/LayoutPresetDropdown'
+import StepProgressCard from '../components/Chat/StepProgressCard'
 import TaskTemplate, { DEFAULT_TASK_TEMPLATES } from '../components/Chat/TaskTemplate'
 import AgentIcon from '../components/AgentIcon'
 import {
@@ -32,6 +34,16 @@ export default function ChatPage(): JSX.Element {
       useChatStore.getState().clearMessages()
     }
   }, [urlConvId])
+
+  // 消费跨页面的待发送提示词（如知识图谱"在对话中继续"），自动发出后清空
+  const pendingChatPrompt = useUIStore((s) => s.pendingChatPrompt)
+  const setPendingChatPrompt = useUIStore((s) => s.setPendingChatPrompt)
+  useEffect(() => {
+    if (pendingChatPrompt && !isStreaming) {
+      setPendingChatPrompt(null)
+      sendMessage(pendingChatPrompt)
+    }
+  }, [pendingChatPrompt, isStreaming])
 
   const handleTemplateClick = (prompt: string): void => {
     sendMessage(prompt)
@@ -98,22 +110,13 @@ export default function ChatPage(): JSX.Element {
   ]
 
   const showWelcome = messages.length === 0 && !urlConvId
-  const toggleRightPanel = useUIStore((s) => s.toggleRightPanel)
-  const rightPanelOpen = useUIStore((s) => s.rightPanelOpen)
 
   return (
     <div className="h-full flex flex-col relative">
-      <button
-        onClick={toggleRightPanel}
-        className={`absolute top-3 right-4 z-20 p-2 rounded transition-colors ${
-          rightPanelOpen
-            ? 'text-primary bg-primary/10 hover:bg-primary/20'
-            : 'text-gray-500 hover:text-primary hover:bg-gray-100'
-        }`}
-        title={rightPanelOpen ? '隐藏侧边栏' : '显示侧边栏'}
-      >
-        <LayoutOutlined />
-      </button>
+      {/* 右侧工具面板：点击弹出固定窗口排布选择器 */}
+      <LayoutPresetDropdown />
+      {/* 任务步骤进度悬浮卡片：固定在右上角，不挤占消息气泡空间 */}
+      <StepProgressCard />
       {showWelcome ? (
         <div className="flex-1 flex flex-col items-center justify-center px-6 overflow-y-auto py-8">
           <div className="text-center mb-8">
