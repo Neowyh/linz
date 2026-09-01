@@ -1,6 +1,7 @@
 import type { ComponentType } from 'react'
 import { lazy } from 'react'
 import {
+  ApartmentOutlined,
   CodeOutlined,
   DeploymentUnitOutlined,
   FolderOpenOutlined,
@@ -83,6 +84,14 @@ export const PANEL_REGISTRY: RegisteredPanel[] = [
     ...getPanelMeta('field'),
     icon: <LineChartOutlined />,
     component: lazy(() => import('../components/panels/SolverResultsPanel')) as unknown as ComponentType<{
+      instanceId: string
+      panelType: PanelTypeId
+    }>
+  },
+  {
+    ...getPanelMeta('synapse'),
+    icon: <ApartmentOutlined />,
+    component: lazy(() => import('../components/panels/SynapsePanel')) as unknown as ComponentType<{
       instanceId: string
       panelType: PanelTypeId
     }>

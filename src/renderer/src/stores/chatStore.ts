@@ -74,51 +74,62 @@ export const useChatStore = create<ChatState>((set) => ({
     })),
 
   appendStreamChunk: (messageId, chunk) =>
-    set((state) => ({
-      messages: state.messages.map((msg) =>
-        msg.id === messageId ? { ...msg, content: msg.content + chunk } : msg
-      )
-    })),
+    set((state) => {
+      // 定点更新：先定位索引再仅替换目标项，避免每个 chunk 对整数组做 map（长对话流式时 O(n)×每 chunk）。
+      const idx = state.messages.findIndex((m) => m.id === messageId)
+      if (idx < 0) return state
+      const target = state.messages[idx]
+      const next = [...state.messages]
+      next[idx] = { ...target, content: target.content + chunk }
+      return { messages: next }
+    }),
 
   appendThinking: (messageId, delta) =>
-    set((state) => ({
-      messages: state.messages.map((msg) =>
-        msg.id === messageId
-          ? { ...msg, thinking: (msg.thinking || '') + delta }
-          : msg
-      )
-    })),
+    set((state) => {
+      const idx = state.messages.findIndex((m) => m.id === messageId)
+      if (idx < 0) return state
+      const target = state.messages[idx]
+      const next = [...state.messages]
+      next[idx] = { ...target, thinking: (target.thinking || '') + delta }
+      return { messages: next }
+    }),
 
   // 工具调用按 toolCallId 更新；无 ID 或新 ID 一律新增
   upsertToolCall: (messageId, toolCall) =>
-    set((state) => ({
-      messages: state.messages.map((msg) => {
-        if (msg.id !== messageId) return msg
-        const calls = msg.toolCalls ? [...msg.toolCalls] : []
-        if (toolCall.toolCallId) {
-          const idx = calls.findIndex((c) => c.toolCallId === toolCall.toolCallId)
-          if (idx >= 0) {
-            calls[idx] = { ...calls[idx], ...toolCall }
-            return { ...msg, toolCalls: calls }
-          }
+    set((state) => {
+      const idx = state.messages.findIndex((m) => m.id === messageId)
+      if (idx < 0) return state
+      const target = state.messages[idx]
+      const calls = target.toolCalls ? [...target.toolCalls] : []
+      if (toolCall.toolCallId) {
+        const tIdx = calls.findIndex((c) => c.toolCallId === toolCall.toolCallId)
+        if (tIdx >= 0) {
+          calls[tIdx] = { ...calls[tIdx], ...toolCall }
+          const next = [...state.messages]
+          next[idx] = { ...target, toolCalls: calls }
+          return { messages: next }
         }
-        calls.push(toolCall)
-        return { ...msg, toolCalls: calls }
-      })
-    })),
+      }
+      calls.push(toolCall)
+      const next = [...state.messages]
+      next[idx] = { ...target, toolCalls: calls }
+      return { messages: next }
+    }),
 
   // 技能触发信息按 skillId 去重累积（同一技能可能强制+匹配重复报告）
   addSkillTriggers: (messageId, triggers) =>
-    set((state) => ({
-      messages: state.messages.map((msg) => {
-        if (msg.id !== messageId) return msg
-        const existing = msg.skillTriggers ? [...msg.skillTriggers] : []
-        for (const t of triggers) {
-          if (!existing.some((e) => e.skillId === t.skillId)) existing.push(t)
-        }
-        return { ...msg, skillTriggers: existing }
-      })
-    })),
+    set((state) => {
+      const idx = state.messages.findIndex((m) => m.id === messageId)
+      if (idx < 0) return state
+      const target = state.messages[idx]
+      const existing = target.skillTriggers ? [...target.skillTriggers] : []
+      for (const t of triggers) {
+        if (!existing.some((e) => e.skillId === t.skillId)) existing.push(t)
+      }
+      const next = [...state.messages]
+      next[idx] = { ...target, skillTriggers: existing }
+      return { messages: next }
+    }),
 
   startStreaming: (messageId) => set({ isStreaming: true, streamingMessageId: messageId }),
 
@@ -129,12 +140,22 @@ export const useChatStore = create<ChatState>((set) => ({
       if (conversationId && state.conversationId && conversationId !== state.conversationId) {
         return state
       }
+      // 定点更新：仅替换仍在流式的消息，避免对整数组做 map
+      let changed = false
+      const next = state.messages.map((msg) => {
+        if (msg.isStreaming) {
+          changed = true
+          return { ...msg, isStreaming: false }
+        }
+        return msg
+      })
+      if (!changed) {
+        return { isStreaming: false, streamingMessageId: null }
+      }
       return {
         isStreaming: false,
         streamingMessageId: null,
-        messages: state.messages.map((msg) =>
-          msg.isStreaming ? { ...msg, isStreaming: false } : msg
-        )
+        messages: next
       }
     }),
 

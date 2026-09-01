@@ -532,7 +532,9 @@ export abstract class BaseAgent implements IAgent {
         systemPrompt: this.getEffectiveSystemPrompt(task, context),
         task: this.prepareTaskWithContext(task),
         ragContext: effectiveRag,
-        customTools: this.getAvailableTools(context)
+        customTools: this.getAvailableTools(context),
+        // 传入 setState 供 Pi 路径 customTools 安全门在审批时切换 waiting/working（与 DeepSeek 路径一致）
+        setState: (s) => this.setState(s)
       })
       return
     }

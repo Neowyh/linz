@@ -8,6 +8,7 @@ import { findSkillByNameOrId, listSkillScripts } from '../agent-skills.service'
 import { getAppConfig } from '../../store/app-config'
 import { resolvePythonPath } from './python.tool'
 import { buildSafeEnv } from '../../security/env-sandbox'
+import { bundledNodeModulesPath, withBundledBinPath } from '../../resources'
 import { checkPathAllowed } from '../../security/file-protection'
 import { findOnPath } from '../../fs/path-guard'
 
@@ -38,7 +39,22 @@ interface Interpreter {
   beforeScript: string[]
   // true = 直接执行脚本文件本身（.exe），不拼脚本路径参数
   runDirect?: boolean
+  // true = 经 cmd.exe /c 执行（.bat/.cmd），模型参数需做元字符校验防注入
+  shellCmd?: boolean
   env?: NodeJS.ProcessEnv
+}
+
+// cmd.exe 对 argv 中的元字符（& | < > % ^ 等）会做特殊解释，
+// 模型可控参数经 execFile 传给 cmd.exe /c 仍可能被注入（如 "& whoami"）。
+// 对 .bat/.cmd 的模型参数做元字符检查：含危险字符则拒绝，引导改用 .py/.js。
+const CMD_DANGEROUS_CHARS = /[&|<>%^`$\r\n]/
+function validateCmdArgs(args: string[]): string | null {
+  for (const a of args) {
+    if (CMD_DANGEROUS_CHARS.test(a)) {
+      return `参数含 cmd.exe 元字符，.bat/.cmd 脚本不支持此类参数（"${a}"）。请改用 .py/.js 脚本处理含特殊字符的参数。`
+    }
+  }
+  return null
 }
 
 // 按扩展名分发解释器
@@ -49,25 +65,32 @@ async function resolveInterpreter(scriptPath: string, scriptsRoot: string): Prom
 
   switch (ext) {
     case '.py': {
-      // 优先内置便携 Python 3.8.10（预装 numpy/scipy/pandas/matplotlib），其次系统 PATH
+      // 优先内置便携 Python 3.8.10（预装 numpy/scipy/pandas/matplotlib 及 docx/pdf/xlsx 技能依赖），其次系统 PATH
       const py = await resolvePythonPath()
       if (!py) {
         return { error: '未找到 Python 解释器（内置便携版缺失且系统无 python）。请运行 `node scripts/prepare-python.cjs` 准备便携 Python，或在系统安装 Python 后加入 PATH。' }
       }
-      // PYTHONPATH 同时含 scripts 根目录与脚本所在目录，覆盖同级模块导入和嵌套子目录脚本
+      // 便携 Python 的 python38._pth 会忽略 PYTHONPATH，改由 sitecustomize.py 读取的
+      // LINZ_PYTHONPATH 注入 scripts 根目录与脚本所在目录，覆盖同级模块导入和嵌套子目录脚本
       const pyPath = [scriptsRoot, path.dirname(scriptPath)]
         .filter((p, i, arr) => arr.indexOf(p) === i)
         .join(path.delimiter)
-      return { command: py, beforeScript: [], env: buildSafeEnv({ PYTHONPATH: pyPath }) }
+      // 内置 bin 目录（pandoc/poppler）进 PATH，脚本内可 subprocess 调用
+      return { command: py, beforeScript: [], env: withBundledBinPath(buildSafeEnv({ LINZ_PYTHONPATH: pyPath })) }
     }
     case '.js':
     case '.mjs':
-      // Electron 自带 Node 运行时（ELECTRON_RUN_AS_NODE），无需用户安装任何环境
-      return { command: process.execPath, beforeScript: [], env: buildSafeEnv({ ELECTRON_RUN_AS_NODE: '1' }) }
+      // Electron 自带 Node 运行时（ELECTRON_RUN_AS_NODE），无需用户安装任何环境；
+      // NODE_PATH 指向随包内置 npm 库（docx/pptxgenjs），脚本可直接 require
+      return {
+        command: process.execPath,
+        beforeScript: [],
+        env: withBundledBinPath(buildSafeEnv({ ELECTRON_RUN_AS_NODE: '1', NODE_PATH: bundledNodeModulesPath() }))
+      }
     case '.bat':
     case '.cmd':
       return isWin
-        ? { command: process.env.ComSpec || 'cmd.exe', beforeScript: ['/c'] }
+        ? { command: process.env.ComSpec || 'cmd.exe', beforeScript: ['/c'], shellCmd: true }
         : { error: '.bat/.cmd 脚本仅支持 Windows' }
     case '.ps1':
       return isWin
@@ -95,16 +118,19 @@ function truncateOutput(text: string): string {
 }
 
 async function runSkillScript(params: RunSkillScriptParams): Promise<string> {
-  const config = getAppConfig()
-  if (!config.get('skillScriptEnabled')) {
-    return '技能脚本执行未启用（默认关闭，防止不可信脚本自动运行）。请用户在 设置 → 高级 中开启「允许执行技能脚本」后重试。'
-  }
   if (!params.skill?.trim() || !params.script?.trim()) {
     return '参数不完整：需要 skill（技能名称）和 script（脚本文件名，如 run.py 或 scripts/run.py）'
   }
 
   const skill = findSkillByNameOrId(params.skill)
   if (!skill) return `未找到启用中的技能「${params.skill}」`
+
+  // 内置技能脚本随应用打包且经过审查，不受「允许执行技能脚本」总开关限制
+  // （每次执行仍有审批卡拦截）；用户导入的不可信自定义技能需在设置中开启开关。
+  const config = getAppConfig()
+  if (!config.get('skillScriptEnabled') && !skill.is_builtin) {
+    return '技能脚本执行未启用（默认关闭，防止不可信脚本自动运行）。请用户在 设置 → 高级 中开启「允许执行技能脚本」后重试。'
+  }
   if (!skill.package_path) return `技能「${skill.name}」没有技能包目录（手动创建的技能不附带脚本）`
 
   // 文件防护：技能包目录命中受保护路径则拦截
@@ -129,10 +155,17 @@ async function runSkillScript(params: RunSkillScriptParams): Promise<string> {
   const interpreter = await resolveInterpreter(scriptPath, scriptsRoot)
   if ('error' in interpreter) return interpreter.error
 
+  const modelArgs = parseArgs(params.args)
+  // .bat/.cmd 经 cmd.exe /c 执行，模型参数含元字符会被 cmd.exe 解释为命令注入
+  if (interpreter.shellCmd) {
+    const cmdErr = validateCmdArgs(modelArgs)
+    if (cmdErr) return cmdErr
+  }
+
   const args = [
     ...interpreter.beforeScript,
     ...(interpreter.runDirect ? [] : [scriptPath]),
-    ...parseArgs(params.args)
+    ...modelArgs
   ]
 
   // 执行审批由安全策略门统一处理（risk=execute 默认 ask，弹聊天内审批卡），

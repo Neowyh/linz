@@ -92,7 +92,15 @@ export default defineConfig({
     }
   },
   preload: {
-    plugins: [externalizeDepsPlugin()]
+    plugins: [externalizeDepsPlugin()],
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve('src/preload/index.ts'),
+          'dsh-preload': resolve('src/preload/dsh-preload.ts')
+        }
+      }
+    }
   },
   renderer: {
     base: './',

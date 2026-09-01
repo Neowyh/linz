@@ -2,6 +2,7 @@ import initSqlJs, { Database as SqlJsDatabase } from 'sql.js'
 import path from 'path'
 import { app } from 'electron'
 import fs from 'fs'
+import { resolveBundledPath } from '../resources'
 import { ConversationsRepo } from './conversations.repo'
 import { MessagesRepo } from './messages.repo'
 
@@ -21,6 +22,10 @@ export interface Conversation {
   agents_used: string
   total_tokens: number
   status: string
+  parent_conversation_id: string | null
+  fork_at_message_id: string | null
+  seed_length: number
+  cwd: string | null
 }
 
 export interface Message {
@@ -125,6 +130,30 @@ export async function initDatabase(customDbPath?: string): Promise<SqlJsDatabase
     }
   } catch (err) {
     console.warn('[Database] messages skill_triggers migration skipped:', err)
+  }
+
+  // 迁移：conversations 表补分支列（DSH 兼容层用于记录 fork 元数据）
+  try {
+    const convCols = db.exec("SELECT name FROM pragma_table_info('conversations')")
+    const convExisting = new Set(convCols[0]?.values?.map((r) => String(r[0])) ?? [])
+    if (!convExisting.has('parent_conversation_id')) {
+      db.run('ALTER TABLE conversations ADD COLUMN parent_conversation_id TEXT')
+      console.log('[Database] conversations 表新增 parent_conversation_id 列')
+    }
+    if (!convExisting.has('fork_at_message_id')) {
+      db.run('ALTER TABLE conversations ADD COLUMN fork_at_message_id TEXT')
+      console.log('[Database] conversations 表新增 fork_at_message_id 列')
+    }
+    if (!convExisting.has('seed_length')) {
+      db.run('ALTER TABLE conversations ADD COLUMN seed_length INTEGER DEFAULT 0')
+      console.log('[Database] conversations 表新增 seed_length 列')
+    }
+    if (!convExisting.has('cwd')) {
+      db.run('ALTER TABLE conversations ADD COLUMN cwd TEXT')
+      console.log('[Database] conversations 表新增 cwd 列')
+    }
+  } catch (err) {
+    console.warn('[Database] conversations fork columns migration skipped:', err)
   }
 
   // 自动任务表
@@ -785,6 +814,66 @@ export function seedBuiltinAgentSkills(db: any): void {
       target_agents: '["documentation"]',
       trigger_keywords: '["报告","GJB","技术报告","文档","撰写"]',
       priority: 80
+    },
+    {
+      id: 'agent-skill-browser-use',
+      name: '浏览器操作纪律',
+      description: 'browser 工具高效使用规范：先列元素再按编号操作（让小模型也能找准按钮）',
+      content: `用 browser 工具完成网页任务时，按以下纪律操作，避免盲猜 CSS selector：
+
+1. **先列再操作**：点击/输入前先调 \`browser({ action: 'getInteractiveElements' })\`，拿到当前页面可交互元素的编号清单（如 \`[3] <button> "搜索"\`）。
+2. **按编号操作**：用 \`browser({ action: 'click', ref: 3 })\` / \`browser({ action: 'type', ref: 3, text: '翼型' })\` 操作清单里编号为 3 的元素。**优先用 ref 编号，不要自己写 selector**——编号比手写选择器准得多。
+3. **找不到就滚**：目标不在清单里 → \`browser({ action: 'scroll', deltaY: 600 })\` 滚动后重新 \`getInteractiveElements\` 再找。
+4. **编号易失效**：navigate、或 click 触发页面刷新/跳转后，旧编号作废，必须重新 \`getInteractiveElements\` 拿新清单再用 ref。
+5. **先截图后读清单**：\`browser({ action: 'screenshot' })\` 看页面整体布局，\`getInteractiveElements\` 拿精确元素清单，两者配合确认目标。
+6. **输入后等待**：\`type\` 后若页面动态变化（如下拉、结果加载），用 \`browser({ action: 'wait', ref: N })\` 或重新列元素再操作。
+
+只有当 getInteractiveElements 确实列不出目标（如元素在跨域 iframe 内）时，才退回手写 selector。每次失败提示"重新 getInteractiveElements"时，立即照做。`,
+      target_agents: '[]',
+      trigger_keywords: '["浏览器","打开网页","网页","搜索","网站","browser","登录","表单"]',
+      priority: 75
+    },
+    {
+      id: 'agent-skill-creator',
+      name: '技能创建助手',
+      description: '帮用户创建自定义技能：产出结构化技能草稿，用户复制到技能编辑器保存',
+      content: `当用户想创建/新建一个技能（skill）时，你是技能设计助手。你的任务是产出一份**结构化技能草稿**，用户会复制到「Agent 管理 → 新建技能」编辑器里保存。
+
+## 你的输出格式（必须严格遵守）
+对话里给出一段 \`skill-draft\` 代码块，字段与技能编辑器一一对应，让用户复制即可填入：
+
+\`\`\`skill-draft
+名称：<简洁中文，≤50 字，如"翼型优选流程">
+描述：<一句话说明用途，≤200 字>
+目标 Agent：["aero"]  （留空 [] = 适用所有 Agent；合法值见下）
+触发关键词：["翼型","优选","NACA"]  （留空 [] = 始终启用；命中任一关键词才注入，建议给具体词避免过宽）
+优先级：85  （-100~100，越大越优先；过程性核心技能建议 70~90）
+内容：
+<这里写"遇到匹配任务该怎么做"的过程性知识，是真正注入 Agent 系统提示词的部分>
+\`\`\`
+
+输出代码块后，再口头提示用户："已生成草稿，请复制上面 \`skill-draft\` 块到 Agent 管理页 → 新建技能，逐字段填入保存。"
+
+## 设计内容（content 字段）的要点
+1. **写过程不是写说明书**：用"遇到 X 时，按以下步骤..."的口吻，给编号步骤 + 关键决策点，不要罗列概念定义。
+2. **指明该用哪个工具**：涉及计算→calculator/aero_calculator；可视化或统计分析→python；查知识库→knowledge_search；查数据表→db_query；操作网页→browser（且提示先 getInteractiveElements 再按 ref 操作）；执行脚本→run_skill_script。指明工具能大幅降低小模型乱猜。
+3. **给终止/切换条件**：何时算完成、何时该换方案、何时该等用户补充信息。
+4. **聚焦单一主题**：一个技能只管一类任务，别塞太多场景；content 控制在 8000 字内（过长显著增 token）。
+5. **可附带脚本**：若该技能需要执行外部脚本（.py/.js/.bat），提示用户可在技能包 scripts/ 下放脚本，内容里写明用 run_skill_script 调用（但草稿阶段先不涉及路径，让用户后续补）。
+
+## 目标 Agent 合法值（填"目标 Agent"字段用）
+可选：orchestrator(协调)、aero(气动)、structural(结构)、propulsion(推进)、avionics(航电)、simulation(仿真)、documentation(文档)、retriever(检索)、general(通用)。留空 [] 表示对所有 Agent 生效。选多个用 JSON 数组形式如 ["aero","simulation"]。
+
+## 触发关键词建议
+- 太宽（如"分析"）会导致频繁误注入，浪费 token；太窄（如某具体型号）又难命中。
+- 建议用"领域名 + 常见动词/术语"组合，3~6 个词，如翼型类用 ["翼型","NACA","翼型优选","极曲线"]。
+- 若该技能应在某 Agent 的所有任务上都生效，用空数组 []（始终启用）——但要慎用，会恒增 token。
+
+## 交互
+若用户需求模糊，先问 1~2 个关键问题（要给哪个 Agent 用？触发场景是什么？）再产出草稿。需求清晰则直接出草稿。产出后不要擅自假设已保存——技能必须由用户在编辑器里手动保存才算落地。`,
+      target_agents: '[]',
+      trigger_keywords: '["技能","skill","创建技能","新建技能","做个技能","创建一个技能","帮我建技能"]',
+      priority: 80
     }
   ]
 
@@ -795,7 +884,72 @@ export function seedBuiltinAgentSkills(db: any): void {
       [skill.id, skill.name, skill.description, skill.content, skill.target_agents, skill.trigger_keywords, skill.priority]
     )
   }
+
+  // 带技能包的内置 Office 技能（docx/pdf/pptx/xlsx，离线随包部署）：
+  // - content 读自随包 resources/skills/<id>/SKILL.md（改写的内置版，单一数据源，剥离 frontmatter）
+  // - package_path 指向随包 skills/<id> 目录；每次启动刷新（dev 与打包后路径不同，DB 持久化的是绝对路径）
+  // - ON CONFLICT 仅更新内容与路径，保留用户对该技能 enabled 的开关状态
+  const bundledOfficeSkills = [
+    {
+      id: 'agent-skill-docx',
+      name: 'Word 文档（docx）',
+      description: '创建/读取/编辑/批注 Word 文档（.docx/.dotx）：目录、页码、修订、批注、图片、查找替换、格式整理',
+      target_agents: '["documentation"]',
+      trigger_keywords: '["docx","Word","word 文档","文档","doc","批注","修订","生成报告","公文"]',
+      priority: 85
+    },
+    {
+      id: 'agent-skill-pdf',
+      name: 'PDF 文档',
+      description: 'PDF 读写、合并拆分、旋转、水印、加密解密、提取表格/图片、新建 PDF、填写表单、扫描件 OCR',
+      target_agents: '["documentation"]',
+      trigger_keywords: '["pdf","PDF","合并 pdf","填表","pdf 表单","pdf 转图","pdf 提取"]',
+      priority: 86
+    },
+    {
+      id: 'agent-skill-pptx',
+      name: 'PPT 幻灯片（pptx）',
+      description: '创建/读取/编辑 .pptx/.potx 演示文稿：模板、备注、图表、批量改版、设计规范',
+      target_agents: '["documentation"]',
+      trigger_keywords: '["pptx","ppt","幻灯片","演示文稿","deck","ppt 模板","slides"]',
+      priority: 84
+    },
+    {
+      id: 'agent-skill-xlsx',
+      name: 'Excel 表格（xlsx）',
+      description: '创建/读取/编辑/修复 .xlsx/.xlsm/.csv/.tsv 电子表格：公式、格式、图表、数据清洗、金融模型、格式转换',
+      target_agents: '["documentation"]',
+      trigger_keywords: '["xlsx","excel","Excel","表格","电子表格","csv","公式","数据清洗","数据表"]',
+      priority: 86
+    }
+  ]
+
+  for (const s of bundledOfficeSkills) {
+    const pkgDir = resolveBundledPath(path.join('skills', s.id))
+    db.run(
+      `INSERT INTO agent_skills (id, name, description, content, target_agents, trigger_keywords, priority, enabled, is_builtin, is_custom, package_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, 0, ?)
+       ON CONFLICT(id) DO UPDATE SET name = excluded.name, description = excluded.description,
+         content = excluded.content, package_path = excluded.package_path`,
+      [s.id, s.name, s.description, readBundledSkillContent(pkgDir), s.target_agents, s.trigger_keywords, s.priority, pkgDir]
+    )
+  }
+
   debounceSave()
+}
+
+// 读随包技能的 SKILL.md 作为内置技能正文（剥离 YAML frontmatter）；缺失时给可读的回退文本
+function readBundledSkillContent(skillDir: string): string {
+  try {
+    const file = path.join(skillDir, 'SKILL.md')
+    if (!fs.existsSync(file)) throw new Error('SKILL.md missing')
+    let text = fs.readFileSync(file, 'utf8')
+    const frontmatter = text.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/)
+    if (frontmatter) text = text.slice(frontmatter[0].length)
+    return text.trim()
+  } catch {
+    return '（内置技能内容未随包找到，请确认 resources/skills 目录已随应用部署。）'
+  }
 }
 
 // 自动任务仓库

@@ -11,6 +11,7 @@ import {
   FileTextOutlined
 } from '@ant-design/icons'
 import { Button, Empty, message, Spin, Tooltip } from 'antd'
+import DOMPurify from 'dompurify'
 import MarkdownRenderer from '../Markdown/MarkdownRenderer'
 import { usePanelCommandStore } from '../../stores/panelCommandStore'
 
@@ -440,7 +441,7 @@ export default function FilePanel({
         <>
           <style>{PREVIEW_HTML_CSS}</style>
           <div className="h-full overflow-auto bg-white">
-            <div className="linz-html-preview p-3" dangerouslySetInnerHTML={{ __html: preview.html }} />
+            <div className="linz-html-preview p-3" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(preview.html) }} />
           </div>
         </>
       )

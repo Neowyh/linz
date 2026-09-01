@@ -5,21 +5,23 @@ import { calculatorTool } from './calculator.tool'
 import { aeroCalculatorTool } from './aero-calculator.tool'
 import { knowledgeSearchTool, createKnowledgeSearchTool } from './knowledge-search.tool'
 import { dbTablesTool, dbQueryTool } from './db-query.tool'
-import { plotChartTool } from './plot-chart.tool'
-import { dataAnalysisTool } from './data-analysis.tool'
 import { runSkillScriptTool } from './run-skill-script.tool'
 import { htmlToWordTool } from './html-to-word.tool'
 import { pythonTool } from './python.tool'
+import { nodeTool } from './node.tool'
 import { browserTool } from './browser.tool'
 import { createDelegateTool } from './delegate.tool'
 import { createFilesystemTools } from './filesystem.tool'
 import { toolRegistry, type ToolInfo } from './registry'
 
 const DB_TOOLS: Tool[] = [dbTablesTool, dbQueryTool]
-const AERO_TOOLS: Tool[] = [aeroCalculatorTool, calculatorTool, knowledgeSearchTool, plotChartTool, dataAnalysisTool, runSkillScriptTool, pythonTool, browserTool, ...DB_TOOLS]
-const SIM_TOOLS: Tool[] = [calculatorTool, knowledgeSearchTool, plotChartTool, dataAnalysisTool, runSkillScriptTool, pythonTool, browserTool, ...DB_TOOLS]
-const CALC_TOOLS: Tool[] = [calculatorTool, knowledgeSearchTool, plotChartTool, dataAnalysisTool, runSkillScriptTool, pythonTool, browserTool, ...DB_TOOLS]
+// 注：plot_chart / data_analysis 已移除，可视化与统计分析统一由 python 工具（matplotlib/scipy/pandas）承担
+const AERO_TOOLS: Tool[] = [aeroCalculatorTool, calculatorTool, knowledgeSearchTool, runSkillScriptTool, pythonTool, browserTool, ...DB_TOOLS]
+const SIM_TOOLS: Tool[] = [calculatorTool, knowledgeSearchTool, runSkillScriptTool, pythonTool, browserTool, ...DB_TOOLS]
+const CALC_TOOLS: Tool[] = [calculatorTool, knowledgeSearchTool, runSkillScriptTool, pythonTool, browserTool, ...DB_TOOLS]
 const KB_TOOLS: Tool[] = [knowledgeSearchTool, runSkillScriptTool, ...DB_TOOLS]
+// 文档类内置技能（docx/pdf/pptx/xlsx）依赖内联 Python 与内联 JS（docx-js/pptxgenjs）
+const DOC_TOOLS: Tool[] = [knowledgeSearchTool, runSkillScriptTool, pythonTool, nodeTool, ...DB_TOOLS]
 
 const BUILTIN_TOOL_MAP: Record<string, Tool[]> = {
   orchestrator: [],
@@ -29,7 +31,7 @@ const BUILTIN_TOOL_MAP: Record<string, Tool[]> = {
   propulsion: CALC_TOOLS,
   avionics: KB_TOOLS,
   simulation: SIM_TOOLS,
-  documentation: KB_TOOLS,
+  documentation: DOC_TOOLS,
   retriever: KB_TOOLS
 }
 
@@ -40,11 +42,10 @@ const BUILTIN_TOOL_INFOS: Array<{ name: string; description: string; tool: Tool 
   { name: 'knowledge_search', description: '知识库检索', tool: knowledgeSearchTool },
   { name: 'db_tables', description: '列出表格数据库中的数据表结构', tool: dbTablesTool },
   { name: 'db_query', description: '对表格数据库执行只读 SQL 查询', tool: dbQueryTool },
-  { name: 'plot_chart', description: '绘制数据图表并直接显示在对话中（折线/柱状/散点/面积/饼图）', tool: plotChartTool },
-  { name: 'data_analysis', description: '统计分析（描述统计/相关/回归拟合/t 检验/正态性/平滑）', tool: dataAnalysisTool },
   { name: 'run_skill_script', description: '执行技能包附带脚本（.py/.js/.bat 等）', tool: runSkillScriptTool },
   { name: 'html_to_word', description: '将 HTML 文档转换为 Word 文档并可套用参考 Word 模板样式', tool: htmlToWordTool },
   { name: 'python', description: '执行内嵌 Python 3.8.10 代码（numpy/matplotlib/scipy/pandas 可用）用于计算与可视化', tool: pythonTool },
+  { name: 'node', description: '执行内联 JavaScript（内置 Node + docx/pptxgenjs 库），用于生成 Word/PPT 等', tool: nodeTool },
   { name: 'browser', description: '操作应用内嵌侧边栏浏览器（导航/点击/输入/滚动/截图/读取页面）', tool: browserTool }
 ]
 
@@ -65,11 +66,10 @@ export const AVAILABLE_TOOL_NAMES = [
   { name: 'knowledge_search', description: '知识库检索' },
   { name: 'db_tables', description: '列出表格数据库中的数据表结构' },
   { name: 'db_query', description: '对表格数据库执行只读 SQL 查询' },
-  { name: 'plot_chart', description: '绘制数据图表并直接显示在对话中（折线/柱状/散点/面积/饼图）' },
-  { name: 'data_analysis', description: '统计分析（描述统计/相关/回归拟合/t 检验/正态性/平滑）' },
   { name: 'run_skill_script', description: '执行技能包附带脚本（.py/.js/.bat 等）' },
   { name: 'html_to_word', description: '将 HTML 文档转换为 Word 文档并可套用参考 Word 模板样式' },
   { name: 'python', description: '执行内嵌 Python 3.8.10 代码（numpy/matplotlib/scipy/pandas 可用）用于计算与可视化' },
+  { name: 'node', description: '执行内联 JavaScript（内置 Node + docx/pptxgenjs 库），用于生成 Word/PPT 等' },
   { name: 'browser', description: '操作应用内嵌侧边栏浏览器（导航/点击/输入/滚动/截图/读取页面）' },
   { name: 'delegate_to_agent', description: '委派子任务给其他专业 Agent' }
 ]

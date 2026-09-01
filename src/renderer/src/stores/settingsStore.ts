@@ -40,7 +40,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
 
   loadSettings: async () => {
     const [apiKey, modelProvider, modelName, baseURL, theme, ollama] = await Promise.all([
-      window.aeromind.settings.get('apiKey'),
+      window.aeromind.settings.getApiKey(),
       window.aeromind.settings.get('modelProvider'),
       window.aeromind.settings.get('modelName'),
       window.aeromind.settings.get('baseURL'),
@@ -59,7 +59,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   },
 
   setApiKey: async (key) => {
-    await window.aeromind.settings.set('apiKey', key)
+    await window.aeromind.settings.setApiKey(key)
     set({ apiKey: key, isConfigured: !!key })
   },
 

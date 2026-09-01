@@ -17,7 +17,8 @@ export const PANEL_META: Record<PanelTypeId, PanelMeta> = {
   kb: { id: 'kb', title: '知识库', multiInstance: false, closable: true, runtime: 'native' },
   viewer3d: { id: 'viewer3d', title: '三维模型', multiInstance: false, closable: true, runtime: 'webgl' },
   field: { id: 'field', title: '仿真结果', multiInstance: false, closable: true, runtime: 'webgl' },
-  sql: { id: 'sql', title: '数据', multiInstance: false, closable: true, runtime: 'native' }
+  sql: { id: 'sql', title: '数据', multiInstance: false, closable: true, runtime: 'native' },
+  synapse: { id: 'synapse', title: '会话地图', multiInstance: false, closable: true, runtime: 'webview' }
 }
 
 export function getPanelMeta(id: PanelTypeId): PanelMeta {

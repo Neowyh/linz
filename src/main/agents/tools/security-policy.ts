@@ -16,9 +16,7 @@ export const RISK_LABELS: Record<ToolRisk, { label: string; color: string }> = {
 export const TOOL_RISK_MAP: Record<string, ToolRisk> = {
   calculator: 'read',
   aero_calculator: 'read',
-  data_analysis: 'read',
   knowledge_search: 'read',
-  plot_chart: 'read',
   db_tables: 'read',
   db_query: 'read',
   file_read: 'read',
@@ -27,6 +25,7 @@ export const TOOL_RISK_MAP: Record<string, ToolRisk> = {
   html_to_word: 'write',
   run_skill_script: 'execute',
   python: 'execute',
+  node: 'execute',
   browser: 'network',
   delegate_to_agent: 'delegate'
 }

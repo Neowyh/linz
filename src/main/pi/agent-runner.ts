@@ -20,7 +20,8 @@ import { withRetry } from '../llm/retry'
 import { isOllamaAvailable } from '../llm'
 import { getAppConfig } from '../store/app-config'
 import type { Tool } from '@langchain/core/tools'
-import type { StreamChunk, AgentContext, AgentStatusData, AgentState } from '../agents/base.agent'
+import type { StreamChunk, AgentContext, AgentStatusData, AgentState, SecurityContext } from '../agents/base.agent'
+import type { SecurityContextHolder } from './tool-adapter'
 
 // 简单 AsyncQueue：把 push-based 回调转成 pull-based AsyncGenerator
 class AsyncQueue<T> {
@@ -75,6 +76,7 @@ export interface RunWithPiOptions {
   tools?: string[]  // Pi 原生工具名清单（覆盖默认）
   noTools?: 'all' | 'builtin'
   customTools?: Tool[]  // 临智 LangChain 工具（含 MCP / CATIA 等），转成 Pi customTools 注入
+  setState?: (s: AgentState) => void  // 安全门审批时切换 agent 状态（waiting/working），与 DeepSeek 路径一致
 }
 
 export async function ensurePiOrThrow(): Promise<void> {
@@ -95,9 +97,23 @@ export async function* runWithPi(
     ? `[知识库参考]\n${effectiveRag}\n[/知识库参考]\n\n${opts.task}`
     : opts.task
 
-  // Pi 的 bash/grep/find/ls 工具在 Windows 上会通过 Git Bash/WSL 执行命令，
+  // 可用的只读文件工具（read/grep/find/ls）在 Windows 上通过 Git Bash/MSYS2 执行，
   // 模型容易误判为 Linux 环境。这里显式声明宿主系统，避免路径/命令风格混淆。
-  const systemPromptWithHost = `${opts.systemPrompt}\n\n## 宿主环境\n本进程运行于 Windows（Electron 主进程，Node.js）。宿主操作系统是 Windows，文件路径使用反斜杠分隔（如 E:\\lijx\\...）。\nbash 工具会通过 Git Bash / MSYS2 / WSL 的 bash.exe 执行命令，因此命令运行在 POSIX 模拟层中：看到 Unix 风格命令（ls/grep/find）和 /e/lijx/... 形式的路径，但这只是 shell 模拟层，不是真正的 Linux 环境。\n需要操作 Windows 原生程序、注册表或 PowerShell 专属功能时，请通过 bash 调用 powershell.exe -Command "..." 或 cmd.exe /c "..."，不要假设自己在 Linux 中。`
+  // 注意：Pi 原生 bash 已禁用（不经安全门），命令执行请用 python/node/run_skill_script 工具。
+  const systemPromptWithHost = `${opts.systemPrompt}\n\n## 宿主环境\n本进程运行于 Windows（Electron 主进程，Node.js）。宿主操作系统是 Windows，文件路径使用反斜杠分隔（如 E:\\lijx\\...）。\n只读文件工具（read/grep/find/ls）在 Windows 上通过 Git Bash / MSYS2 执行，因此会看到 Unix 风格命令和 /e/lijx/... 形式的路径，但这只是 shell 模拟层，不是真正的 Linux 环境。\n需要执行命令或脚本时，请使用 python / node / run_skill_script 工具（首次执行需用户审批），不要尝试调用 bash。`
+
+  // 组装安全上下文：与 DeepSeek 路径（base.agent.ts streamChat securityContext）对齐，
+  // 供 customTools 安全门做审批/审计。messageId 用本路径生成的（驱动 UI 审批卡定位）。
+  const securityContext: SecurityContext | undefined = opts.setState
+    ? {
+        agentType: opts.agentType as SecurityContext['agentType'],
+        agentName: opts.agentName,
+        agentColor: opts.agentColor,
+        conversationId: context.conversationId,
+        messageId,
+        setState: opts.setState
+      }
+    : undefined
 
   yield* runWithPiPrompt(context, {
     messageId,
@@ -108,7 +124,8 @@ export async function* runWithPi(
     promptText,
     tools: opts.tools,
     noTools: opts.noTools,
-    customTools: opts.customTools
+    customTools: opts.customTools,
+    securityContext
   })
 }
 
@@ -122,6 +139,7 @@ interface PromptRunOptions {
   tools?: string[]
   noTools?: 'all' | 'builtin'
   customTools?: Tool[]
+  securityContext?: SecurityContext
 }
 
 async function* runWithPiPrompt(
@@ -134,8 +152,9 @@ async function* runWithPiPrompt(
 
   // 第一次尝试：DeepSeek（主模型）
   let session: any
+  let holder: SecurityContextHolder = { current: null }
   try {
-    session = await getOrCreateSession(context.conversationId, opts.agentType, {
+    const r = await getOrCreateSession(context.conversationId, opts.agentType, {
       systemPrompt: opts.systemPrompt,
       provider: 'deepseek',
       tools: opts.tools,
@@ -143,6 +162,8 @@ async function* runWithPiPrompt(
       cwd: context.fileWorkspacePath,
       customTools: opts.customTools
     })
+    session = r.session
+    holder = r.securityContextHolder
   } catch (err: any) {
     // DeepSeek context 创建失败（如 Ollama 唯一可用）→ 直接走 Ollama
     if (isAbortError(err) || context.signal.aborted) return
@@ -154,7 +175,7 @@ async function* runWithPiPrompt(
     }
     usedFallback = true
     try {
-      session = await getOrCreateSession(context.conversationId, opts.agentType, {
+      const r2 = await getOrCreateSession(context.conversationId, opts.agentType, {
         systemPrompt: opts.systemPrompt,
         provider: 'ollama',
         tools: opts.tools,
@@ -162,6 +183,8 @@ async function* runWithPiPrompt(
         cwd: context.fileWorkspacePath,
         customTools: opts.customTools
       })
+      session = r2.session
+      holder = r2.securityContextHolder
     } catch (err2: any) {
       yield makeErrorChunk(opts, `Pi 会话创建失败: ${err2?.message || err2}`)
       return
@@ -177,7 +200,10 @@ async function* runWithPiPrompt(
     }
   }
 
-  yield* driveSession(context, opts, session)
+  // 注入当轮安全上下文到 holder（customTools 闭包读取它做审批/审计）
+  holder.current = opts.securityContext ?? null
+
+  yield* driveSession(context, opts, session, holder)
 
   // 显式 abort 保底
   if (context.signal.aborted) {
@@ -188,7 +214,8 @@ async function* runWithPiPrompt(
 async function* driveSession(
   context: AgentContext,
   opts: PromptRunOptions,
-  session: any
+  session: any,
+  holder: SecurityContextHolder
 ): AsyncGenerator<StreamChunk> {
   const queue = new AsyncQueue<PiStreamChunk>()
   const unsub = subscribeToSession(session, (chunk) => queue.push(chunk), context.signal)
@@ -220,7 +247,7 @@ async function* driveSession(
       }
       try {
         // 切换 provider 重新创建 session 并重试
-        const fallbackSession = await getOrCreateSession(context.conversationId, opts.agentType, {
+        const fallbackResult = await getOrCreateSession(context.conversationId, opts.agentType, {
           systemPrompt: opts.systemPrompt,
           provider: 'ollama',
           tools: opts.tools,
@@ -228,6 +255,9 @@ async function* driveSession(
           cwd: context.fileWorkspacePath,
           customTools: opts.customTools
         })
+        const fallbackSession = fallbackResult.session
+        // 新 session 有自己的 holder，注入当轮安全上下文后再 prompt
+        fallbackResult.securityContextHolder.current = opts.securityContext ?? null
         // 先推一条提示给用户
         queue.push({ content: '\n\n⚠️ 云端模型不可用，已切换到本地 Ollama 模型...\n\n' })
         // 切换到新 session 的事件流：unsub 旧的，订阅新的

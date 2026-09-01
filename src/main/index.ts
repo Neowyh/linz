@@ -1,5 +1,5 @@
 // Polyfill 已通过 electron.vite.config.ts 的 rollupOptions.output.banner 注入 bundle 顶部
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, dialog } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { is } from '@electron-toolkit/utils'
 import { createMainWindow } from './window'
@@ -17,6 +17,7 @@ import { setupAppMenu } from './menu'
 import { initDefaultWorkspace, getWorkspaceDbPath, getWorkspaceKbPath, getWorkspaceTablesPath } from './workspace'
 import { mcpManager } from './mcp/manager'
 import { disposeAll as disposePiSessions } from './pi/session-manager'
+import { initDshShim, disposeDshShim } from './dsh'
 
 // Win7 兼容开关：必须在 app.whenReady() 之前设置
 // 1. no-sandbox: Win7 渲染进程 sandbox 不稳定，必须关闭
@@ -63,7 +64,8 @@ let ipcRegistered = false
 let isQuitting = false
 
 app.whenReady().then(async () => {
-  electronApp.setAppUserModelId('com.aeromind')
+  // 与 electron-builder.yml 的 appId 保持一致，确保 Windows 任务栏分组与通知归属正确
+  electronApp.setAppUserModelId('com.linz.app')
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
@@ -127,6 +129,12 @@ app.whenReady().then(async () => {
     ipcRegistered = true
   }
 
+  // 初始化 DSH 兼容层（内嵌 HTTP 服务器 + 会话适配器 + 插件加载器）
+  // 在 IPC 注册之后启动，以便 dsh.ipc.ts 的处理器可用
+  initDshShim(() => mainWindow).catch((err) => {
+    console.warn('[Main] DSH shim init failed:', err)
+  })
+
   // 启动所有自动任务调度
   startAllSchedulers()
 
@@ -143,6 +151,13 @@ app.whenReady().then(async () => {
       mainWindow?.show()
     }
   })
+}).catch((err: unknown) => {
+  const msg = err instanceof Error ? err.message : String(err)
+  console.error('[App] 启动失败:', err)
+  try {
+    dialog.showErrorBox('应用启动失败', `初始化过程中出错：${msg}\n\n请检查工作区与数据库权限后重试。`)
+  } catch {}
+  app.exit(1)
 })
 
 // 退出前标记真正退出，关闭 MCP 连接，保存数据库并停止调度器
@@ -159,6 +174,11 @@ app.on('before-quit', async (e) => {
       await mcpManager.stopAll()
     } catch (err) {
       console.warn('[Main] MCP stopAll failed:', err)
+    }
+    try {
+      await disposeDshShim()
+    } catch (err) {
+      console.warn('[Main] DSH shim dispose failed:', err)
     }
     stopAllSchedulers()
     saveDatabase()

@@ -99,6 +99,10 @@ export function resolveEffectiveSkills(
 }
 
 // 列出技能包 scripts/ 下的脚本文件（相对路径，如 scripts/run.py）
+// 跳过 office/、__pycache__ 等内部库/缓存目录——它们不是给模型直接执行的脚本，
+// 列出来会撑爆提示词（内置 docx/pptx/xlsx 技能的 office/ 子树有 40+ 文件）
+const SCRIPT_LIST_SKIP_DIRS = new Set(['office', '__pycache__'])
+
 export function listSkillScripts(packagePath: string): string[] {
   try {
     const scriptDir = path.join(packagePath, 'scripts')
@@ -107,8 +111,10 @@ export function listSkillScripts(packagePath: string): string[] {
     const walk = (dir: string, prefix: string): void => {
       for (const f of fs.readdirSync(dir).sort()) {
         const full = path.join(dir, f)
-        if (fs.statSync(full).isDirectory()) walk(full, `${prefix}${f}/`)
-        else if (!f.startsWith('.')) out.push(`${prefix}${f}`)
+        if (fs.statSync(full).isDirectory()) {
+          if (SCRIPT_LIST_SKIP_DIRS.has(f)) continue
+          walk(full, `${prefix}${f}/`)
+        } else if (!f.startsWith('.')) out.push(`${prefix}${f}`)
       }
     }
     walk(scriptDir, 'scripts/')

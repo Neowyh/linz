@@ -4,6 +4,18 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 
 type Rep = 'surface' | 'wireframe' | 'points'
 
+// 显式释放几何体与材质的 GPU 缓冲区。
+// Three.js 不会随 scene.remove 自动回收 GPU 内存，同上下文内反复重建会累积泄漏。
+function disposeObject3D(obj: THREE.Object3D): void {
+  const geo = (obj as THREE.Mesh).geometry as THREE.BufferGeometry | undefined
+  if (geo) geo.dispose()
+  const mat = (obj as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined
+  if (mat) {
+    if (Array.isArray(mat)) mat.forEach((m) => m.dispose())
+    else mat.dispose()
+  }
+}
+
 interface Props {
   positions: number[]
   indices: number[]
@@ -73,19 +85,55 @@ export default memo(function ThreeMeshViewer({ positions, indices, representatio
     })
     ro.observe(wrap)
 
+    // RAF 循环受可见性门控：面板被 dock 隐藏（display:none / 0×0）时停止渲染，
+    // 避免空转渲染隐藏画布持续吃 GPU、拖慢整机。可见时恢复。
+    // 注：damping 需要持续 update 才有惯性，但隐藏时无人交互，停掉无副作用。
     let raf = 0
+    let visible = false
     const loop = (): void => {
+      if (!visible) return // 不可见时不再排帧（恢复时由 observer 重新 kick）
       controls.update()
       renderer.render(scene, camera)
       raf = requestAnimationFrame(loop)
     }
-    loop()
+    const kick = (): void => {
+      if (raf) return
+      raf = requestAnimationFrame(loop)
+    }
+    const stop = (): void => {
+      if (raf) cancelAnimationFrame(raf)
+      raf = 0
+    }
+
+    // IntersectionObserver：wrap 与视口无交集（含 display:none / 被移出可视区 / 0 尺寸）即不可见
+    const io = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0]
+        const next = entry.isIntersecting && entry.intersectionRatio > 0
+        if (next === visible) return
+        visible = next
+        if (visible) kick()
+        else stop()
+      },
+      { threshold: [0, 0.0001] }
+    )
+    io.observe(wrap)
+
+    // 首帧：若初始即可见（典型情况），启动循环
+    if (wrap.clientWidth > 0 && wrap.clientHeight > 0) {
+      visible = true
+      kick()
+    }
 
     return () => {
-      cancelAnimationFrame(raf)
+      stop()
+      io.disconnect()
       ro.disconnect()
       controls.dispose()
-      objectsRef.current.forEach((o) => scene.remove(o))
+      objectsRef.current.forEach((o) => {
+      disposeObject3D(o)
+      scene.remove(o)
+    })
       objectsRef.current = []
       renderer.dispose()
       if (renderer.domElement.parentNode) renderer.domElement.parentNode.removeChild(renderer.domElement)
@@ -101,7 +149,10 @@ export default memo(function ThreeMeshViewer({ positions, indices, representatio
     const scene = sceneRef.current
     const renderer = rendererRef.current
     if (!scene || !renderer) return
-    objectsRef.current.forEach((o) => scene.remove(o))
+    objectsRef.current.forEach((o) => {
+      disposeObject3D(o)
+      scene.remove(o)
+    })
     objectsRef.current = []
     if (positions.length < 9 || indices.length < 3) return
 

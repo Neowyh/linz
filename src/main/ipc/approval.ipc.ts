@@ -53,6 +53,10 @@ export function registerApprovalIPC(): void {
 
   ipcMain.handle('security:setPolicy', (_event, toolName: string, action: 'allow' | 'ask' | 'deny' | null) => {
     if (!toolName || typeof toolName !== 'string') return { success: false, error: '工具名非法' }
+    // IPC 不强制 TS 类型，须运行时校验防任意值落入配置
+    if (action !== null && !['allow', 'ask', 'deny'].includes(action)) {
+      return { success: false, error: '非法策略值' }
+    }
     setToolPolicy(toolName, action)
     return { success: true }
   })

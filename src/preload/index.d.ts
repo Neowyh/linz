@@ -369,6 +369,8 @@ export interface AeromindAPI {
   settings: {
     get(key: string): Promise<any>
     set(key: string, value: any): Promise<{ success: boolean }>
+    getApiKey(): Promise<string>
+    setApiKey(key: string): Promise<{ success: boolean }>
   }
   autoTask: {
     list(): Promise<any[]>
@@ -537,6 +539,13 @@ export interface AeromindAPI {
   }
   menu: {
     onAction(callback: (data: { action: string; payload?: unknown }) => void): () => void
+  }
+  dsh: {
+    getPort(): Promise<number>
+    getConfig(): Promise<{ port: number; preloadPath: string }>
+    listPlugins(): Promise<Array<{ name: string; version: string; packageDir: string }>>
+    installPlugin(packageDir: string): Promise<{ success: boolean; name?: string; error?: string }>
+    onOpenSessionRequest(callback: (sessionId: string) => void): () => void
   }
 }
 

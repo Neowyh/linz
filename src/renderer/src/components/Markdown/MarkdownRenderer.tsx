@@ -1,3 +1,4 @@
+import { memo, useMemo } from 'react'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
@@ -28,99 +29,121 @@ function safeUrlTransform(url: string): string {
   return url.startsWith('data:image/') ? url : defaultUrlTransform(url)
 }
 
-export default function MarkdownRenderer({ content }: MarkdownRendererProps): JSX.Element {
+// components 覆盖表提到模块级：引用稳定，避免每次 render 新建内联函数
+// 触发 react-markdown 重算（这是对话切换时历史消息重解析的主要成本来源）。
+// 注：`a` 处理器用 usePanelCommandStore.getState()（静态调用，非 hook），可安全提到组件外。
+const MARKDOWN_COMPONENTS = {
+  table: ({ children }: any) => (
+    <div className="overflow-x-auto my-2">
+      <table className="min-w-full border-collapse border border-gray-200 text-xs">
+        {children}
+      </table>
+    </div>
+  ),
+  thead: ({ children }: any) => <thead className="bg-white">{children}</thead>,
+  th: ({ children }: any) => (
+    <th className="border border-gray-200 px-3 py-1.5 text-left font-medium text-gray-900">
+      {children}
+    </th>
+  ),
+  td: ({ children }: any) => (
+    <td className="border border-gray-200 px-3 py-1.5 text-gray-900">{children}</td>
+  ),
+  code: ({ className, children, ...props }: any) => {
+    // 行内代码（无 language-xxx className）走行内样式
+    const isInline = !className || !className.includes('language-')
+    if (isInline) {
+      return (
+        <code className="bg-white text-primary px-1 py-0.5 rounded text-xs" {...props}>
+          {children}
+        </code>
+      )
+    }
+    return (
+      <code
+        className={`${className ?? ''} block bg-gray-900 text-gray-100 p-3 rounded-lg my-2 text-xs overflow-x-auto whitespace-pre`}
+        {...props}
+      >
+        {children}
+      </code>
+    )
+  },
+  pre: ({ children }: any) => <>{children}</>,
+  h1: ({ children }: any) => <h1 className="text-lg font-bold mt-4 mb-2 text-gray-900">{children}</h1>,
+  h2: ({ children }: any) => <h2 className="text-base font-bold mt-3 mb-2 text-gray-900">{children}</h2>,
+  h3: ({ children }: any) => <h3 className="text-sm font-bold mt-2 mb-1 text-gray-900">{children}</h3>,
+  p: ({ children }: any) => <p className="my-1 leading-relaxed">{children}</p>,
+  ul: ({ children }: any) => <ul className="list-disc list-inside my-1 space-y-0.5">{children}</ul>,
+  ol: ({ children }: any) => <ol className="list-decimal list-inside my-1 space-y-0.5">{children}</ol>,
+  li: ({ children }: any) => <li className="text-sm">{children}</li>,
+  blockquote: ({ children }: any) => (
+    <blockquote className="border-l-4 border-primary pl-3 my-2 text-gray-600 italic">
+      {children}
+    </blockquote>
+  ),
+  hr: () => <hr className="my-4 border-gray-200" />,
+  strong: ({ children }: any) => <strong className="font-bold text-gray-900">{children}</strong>,
+  // 对话消息里的 http(s) 链接：点击不跳外部浏览器，而是 dispatch 一条 browser 命令，
+  // 由 panelCommandStore 自动打开右侧浏览器面板并导航到该 URL。
+  a: ({ href, children }: any) => {
+    const isHttp = typeof href === 'string' && /^https?:\/\//i.test(href)
+    if (!isHttp) {
+      // 非 http(s) 协议保持默认（不拦截）
+      return <a href={href} target="_blank" rel="noreferrer">{children}</a>
+    }
+    return (
+      <a
+        href={href}
+        onClick={(e) => {
+          e.preventDefault()
+          usePanelCommandStore.getState().dispatch({
+            panelType: 'browser',
+            action: 'navigate',
+            payload: { url: href }
+          })
+        }}
+        className="text-primary underline hover:opacity-80 cursor-pointer"
+        title={`在右侧浏览器面板打开：${href}`}
+      >
+        {children}
+      </a>
+    )
+  },
+  img: ({ src, alt }: any) => (
+    <Image
+      src={src}
+      alt={alt}
+      className="my-2 rounded-lg border border-gray-100"
+      style={{ maxWidth: '100%' }}
+    />
+  )
+} as const
+
+// 插件数组也提到模块级，引用稳定，避免 ReactMarkdown 因 plugins 引用变化重算。
+const REMARK_PLUGINS = [remarkGfm, remarkMath]
+const REHYPE_PLUGINS = [rehypeKatex, [rehypeHighlight, { detect: true, ignoreMissing: true }] as any]
+
+/**
+ * 消息体 Markdown 渲染器。memo + content 唯一依赖：
+ * 历史消息切换时 React diff 跳过重解析（react-markdown + gfm/math/katex/highlight 4 插件
+ * 是对话切换最大成本来源）。content 变化时（流式 append）才重渲，符合预期。
+ */
+const MarkdownRenderer = memo(function MarkdownRenderer({ content }: MarkdownRendererProps): JSX.Element {
+  // normalizeMath 用 useMemo 缓存：content 不变时不重跑正则归一化
+  const normalized = useMemo(() => normalizeMath(content), [content])
+
   if (!content) return <></>
 
   return (
     <ReactMarkdown
       urlTransform={safeUrlTransform}
-      remarkPlugins={[remarkGfm, remarkMath]}
-      rehypePlugins={[rehypeKatex, [rehypeHighlight, { detect: true, ignoreMissing: true }]]}
-      components={{
-        table: ({ children }) => (
-          <div className="overflow-x-auto my-2">
-            <table className="min-w-full border-collapse border border-gray-200 text-xs">
-              {children}
-            </table>
-          </div>
-        ),
-        thead: ({ children }) => <thead className="bg-white">{children}</thead>,
-        th: ({ children }) => (
-          <th className="border border-gray-200 px-3 py-1.5 text-left font-medium text-gray-900">
-            {children}
-          </th>
-        ),
-        td: ({ children }) => (
-          <td className="border border-gray-200 px-3 py-1.5 text-gray-900">{children}</td>
-        ),
-        code: ({ className, children, ...props }) => {
-          // 行内代码（无 language-xxx className）走行内样式
-          const isInline = !className || !className.includes('language-')
-          if (isInline) {
-            return (
-              <code className="bg-white text-primary px-1 py-0.5 rounded text-xs" {...props}>
-                {children}
-              </code>
-            )
-          }
-          return (
-            <code className={`${className ?? ''} block bg-gray-900 text-gray-100 p-3 rounded-lg my-2 text-xs overflow-x-auto whitespace-pre`} {...props}>
-              {children}
-            </code>
-          )
-        },
-        pre: ({ children }) => <>{children}</>,
-        h1: ({ children }) => <h1 className="text-lg font-bold mt-4 mb-2 text-gray-900">{children}</h1>,
-        h2: ({ children }) => <h2 className="text-base font-bold mt-3 mb-2 text-gray-900">{children}</h2>,
-        h3: ({ children }) => <h3 className="text-sm font-bold mt-2 mb-1 text-gray-900">{children}</h3>,
-        p: ({ children }) => <p className="my-1 leading-relaxed">{children}</p>,
-        ul: ({ children }) => <ul className="list-disc list-inside my-1 space-y-0.5">{children}</ul>,
-        ol: ({ children }) => <ol className="list-decimal list-inside my-1 space-y-0.5">{children}</ol>,
-        li: ({ children }) => <li className="text-sm">{children}</li>,
-        blockquote: ({ children }) => (
-          <blockquote className="border-l-4 border-primary pl-3 my-2 text-gray-600 italic">
-            {children}
-          </blockquote>
-        ),
-        hr: () => <hr className="my-4 border-gray-200" />,
-        strong: ({ children }) => <strong className="font-bold text-gray-900">{children}</strong>,
-        // 对话消息里的 http(s) 链接：点击不跳外部浏览器，而是 dispatch 一条 browser 命令，
-        // 由 panelCommandStore 自动打开右侧浏览器面板并导航到该 URL。
-        a: ({ href, children }) => {
-          const isHttp = typeof href === 'string' && /^https?:\/\//i.test(href)
-          if (!isHttp) {
-            // 非 http(s) 协议保持默认（不拦截）
-            return <a href={href} target="_blank" rel="noreferrer">{children}</a>
-          }
-          return (
-            <a
-              href={href}
-              onClick={(e) => {
-                e.preventDefault()
-                usePanelCommandStore.getState().dispatch({
-                  panelType: 'browser',
-                  action: 'navigate',
-                  payload: { url: href }
-                })
-              }}
-              className="text-primary underline hover:opacity-80 cursor-pointer"
-              title={`在右侧浏览器面板打开：${href}`}
-            >
-              {children}
-            </a>
-          )
-        },
-        img: ({ src, alt }) => (
-          <Image
-            src={src}
-            alt={alt}
-            className="my-2 rounded-lg border border-gray-100"
-            style={{ maxWidth: '100%' }}
-          />
-        )
-      }}
+      remarkPlugins={REMARK_PLUGINS}
+      rehypePlugins={REHYPE_PLUGINS}
+      components={MARKDOWN_COMPONENTS}
     >
-      {normalizeMath(content)}
+      {normalized}
     </ReactMarkdown>
   )
-}
+})
+
+export default MarkdownRenderer

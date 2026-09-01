@@ -9,6 +9,7 @@ import * as path from 'path'
 import { randomUUID } from 'crypto'
 import { app } from 'electron'
 import { buildSafeEnv } from '../../security/env-sandbox'
+import { withBundledBinPath } from '../../resources'
 import { findOnPath, probeFileCandidates } from '../../fs/path-guard'
 
 const execFileAsync = promisify(execFile)
@@ -159,7 +160,8 @@ async function runPython(params: PythonParams): Promise<string> {
         timeout: EXEC_TIMEOUT,
         maxBuffer: MAX_BUFFER,
         windowsHide: true,
-        env: buildSafeEnv()
+        // 白名单环境 + 内置 bin 目录进 PATH：让内联代码能 subprocess 调用随包带的 pandoc/pdftoppm 等
+        env: withBundledBinPath(buildSafeEnv())
       })
       stdout = r.stdout || ''
       stderr = r.stderr || ''

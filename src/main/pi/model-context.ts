@@ -7,7 +7,7 @@
 import { app } from 'electron'
 import * as fs from 'fs'
 import * as path from 'path'
-import { getAppConfig } from '../store/app-config'
+import { getAppConfig, getApiKeyDecrypted } from '../store/app-config'
 import { ensurePi } from './index'
 import { isOllamaAvailable } from '../llm'
 
@@ -62,7 +62,7 @@ function resolveProviderSpec(provider: PiProvider): ProviderSpec {
     id: 'deepseek',
     baseURL: config.get('baseURL') || 'https://api.deepseek.com',
     modelName: config.get('modelName') || 'deepseek-chat',
-    apiKey: config.get('apiKey') || '',
+    apiKey: getApiKeyDecrypted(),
     apiKind: 'openai-completions',
     compat: { thinkingFormat: 'deepseek' },
     contextWindow: 64000,
@@ -147,7 +147,7 @@ async function buildModelContext(): Promise<ModelContext> {
 
 export async function getModelContext(): Promise<ModelContext> {
   const config = getAppConfig()
-  const apiKey = config.get('apiKey') || ''
+  const apiKey = getApiKeyDecrypted()
   const baseURL = config.get('baseURL') || 'https://api.deepseek.com'
   const modelName = config.get('modelName') || 'deepseek-chat'
   const ollamaEnabled = config.get('ollama')?.enabled ? 'on' : 'off'

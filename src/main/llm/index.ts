@@ -1,5 +1,5 @@
 import { ChatOpenAI } from '@langchain/openai'
-import { getAppConfig } from '../store/app-config'
+import { getAppConfig, getApiKeyDecrypted } from '../store/app-config'
 import type { LLMConfig } from './deepseek'
 import { DEFAULT_LLM_CONFIG } from './deepseek'
 
@@ -11,7 +11,7 @@ export function getLLMConfig(): LLMConfig {
   const config = getAppConfig()
   return {
     baseURL: config.get('baseURL') || DEFAULT_LLM_CONFIG.baseURL,
-    apiKey: config.get('apiKey') || DEFAULT_LLM_CONFIG.apiKey,
+    apiKey: getApiKeyDecrypted() || DEFAULT_LLM_CONFIG.apiKey,
     modelName: config.get('modelName') || DEFAULT_LLM_CONFIG.modelName
   }
 }

@@ -8,3 +8,8 @@ dist/
 .wopentest/
 __pycache__/
 *.pyc
+.zcode/
+
+# Large binary resources — prepared by scripts/prepare-python.cjs and prepare-skill-deps.cjs
+resources/bin/win32/python/Lib/site-packages/
+resources/bin/win32/poppler/

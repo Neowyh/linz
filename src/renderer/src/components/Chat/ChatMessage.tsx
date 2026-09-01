@@ -1,6 +1,6 @@
 import { FileTextOutlined, FileWordOutlined, DownloadOutlined, ToolOutlined, BulbOutlined, CheckCircleFilled, LoadingOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { message as antdMessage, Collapse } from 'antd'
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import type { ChatMessage as ChatMessageType, ToolCallEntry, SkillTriggerInfo } from '../../types/chat'
 import { resolveAgentDisplaySnapshot } from '../../utils/agentDisplay'
 import { extractImagesToFiles, convertContentSvgToPng } from '../../utils/exportImages'
@@ -168,7 +168,10 @@ function SkillTriggerCard({ triggers }: { triggers: SkillTriggerInfo[] }): JSX.E
   )
 }
 
-export default function ChatMessage({ message }: ChatMessageProps): JSX.Element {
+// memo：历史消息对象为不可变快照（流式只往对应消息追加 chunk，切换对话时整体替换数组），
+// 引用稳定时 React diff 跳过重渲——避免切换对话时对全部历史消息重跑 stripAttachmentContent 正则 + 子树。
+// pendingApprovals 选择器变化（审批卡增删）仍会触发对应消息重渲，符合预期。
+const ChatMessage = memo(function ChatMessage({ message }: ChatMessageProps): JSX.Element {
   const isUser = message.role === 'user'
   const [exporting, setExporting] = useState<'word' | null>(null)
 
@@ -381,4 +384,6 @@ export default function ChatMessage({ message }: ChatMessageProps): JSX.Element 
       </div>
     </div>
   )
-}
+})
+
+export default ChatMessage

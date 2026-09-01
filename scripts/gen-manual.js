@@ -261,8 +261,8 @@ children.push(
       ['aero_calculator', '气动公式计算（升力/阻力/雷诺数/马赫数/动压/升阻比/翼载）'],
       ['knowledge_search', '本地知识库检索'],
       ['db_tables / db_query', '列出已导入数据表结构 / 对表格执行只读 SQL 查询'],
-      ['plot_chart', '绘制数据图表（折线/柱状/散点/饼图），直接显示在对话中'],
-      ['data_analysis', '统计分析（描述统计/相关/回归/t 检验/正态性/平滑）'],
+      ['python', '执行内嵌 Python（numpy/matplotlib/scipy/pandas 及 docx/pdf/xlsx 技能依赖）完成计算与可视化'],
+      ['node', '执行内联 JavaScript（内置 docx/pptxgenjs 库），生成 Word/PPT 文档'],
       ['run_skill_script', '执行技能附带脚本（.py/.js/.bat，执行前弹窗确认）']
     ]),
   h3('4.2.5 技能：可复用的领域 Know-How'),
@@ -299,7 +299,7 @@ children.push(
   bullet('对话中的 Agent 会自动检索知识库，将相关内容以「知识库参考」注入回答，无需手动操作。'),
   bullet('支持文档标签/领域修改、单个删除与批量删除，知识库体积、文档数、文本块数实时统计。'),
   h3('4.4.3 数据表格（数据库）'),
-  p('「数据库」标签页管理导入的结构化数据表（xlsx/csv）。导入后可直接预览数据，Agent 通过 db_tables / db_query 工具用 SQL 查询这些表格，并用 plot_chart 绘制图表——下图为查询屈曲试验数据库并可视化散点分布的实际对话。'),
+  p('「数据库」标签页管理导入的结构化数据表（xlsx/csv）。导入后可直接预览数据，Agent 通过 db_tables / db_query 工具用 SQL 查询这些表格，并用 python 绘制图表——下图为查询屈曲试验数据库并可视化散点分布的实际对话。'),
   ...img('conv-table-chart.png', '图 4-13 表格查询与可视化：从数据库筛选屈曲值并绘制散点图')
 )
 
@@ -346,7 +346,7 @@ children.push(
   pageBreak(),
   h1('第五章 典型应用场景'),
   h2('5.1 翼型气动分析'),
-  p('输入「根据 NACA 2412 翼型参数，分析巡航马赫数 0.3 下的升阻比」→ 气动 Agent 调用 aero_calculator 完成升阻估算，结合知识库中的翼型数据给出分析结论，plot_chart 绘制升阻极曲线。'),
+  p('输入「根据 NACA 2412 翼型参数，分析巡航马赫数 0.3 下的升阻比」→ 气动 Agent 调用 aero_calculator 完成升阻估算，结合知识库中的翼型数据给出分析结论，python 绘制升阻极曲线。'),
   h2('5.2 跨专业协同设计'),
   p('输入「评估某翼型气动与结构耦合」→ 协调 Agent 拆解任务，气动 Agent 与结构 Agent 并发工作，互相通过消息传递气动载荷与强度校核结果，最后汇总为一致性结论。'),
   h2('5.3 对话驱动 CAD 建模'),

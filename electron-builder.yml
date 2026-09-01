@@ -11,10 +11,16 @@ extraResources:
   # 必须脱离 asar（asar 内 .wasm 会被改写，无法加载），打包后落在 <安装目录>/resources/occt/
   - from: resources/occt
     to: occt
+  # 随包携带内置技能（docx/pdf/pptx/xlsx 的 SKILL.md + scripts）与 npm 库（docx/pptxgenjs）
+  # 打包后落在 <安装目录>/resources/skills/，DB 种子时通过 resolveBundledPath 定位
+  - from: resources/skills
+    to: skills
 # 原生模块必须脱离 asar 打包（.node 二进制无法从 asar 加载）
+# sql.js 的 sql-wasm.wasm 也需脱离 asar，否则主进程加载 WASM 会失败（主对话库不可用）
 asarUnpack:
   - '**/node_modules/better-sqlite3/**'
   - '**/node_modules/node-pty/**'
+  - '**/node_modules/sql.js/**'
 files:
   - '!**/.vscode/*'
   - '!src/*'

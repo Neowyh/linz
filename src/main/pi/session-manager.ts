@@ -11,7 +11,7 @@ import * as fs from 'fs'
 import { ensurePi } from './index'
 import { getModelContext, getOllamaModelContext, type ModelContext, type PiProvider } from './model-context'
 import { getCurrentWorkspace } from '../store/app-config'
-import { toPiCustomTools } from './tool-adapter'
+import { toPiCustomTools, type SecurityContextHolder } from './tool-adapter'
 import type { Tool } from '@langchain/core/tools'
 
 interface SessionEntry {
@@ -20,6 +20,7 @@ interface SessionEntry {
   provider: PiProvider
   cwd?: string
   customToolNames: string  // 工具名有序串指纹，用于复用判定（比数量更严，工具内容变化也触发重建）
+  securityContextHolder: SecurityContextHolder  // customTools 闭包绑定的 holder，runner 每次 prompt 前更新 .current
 }
 
 const sessions = new Map<string, SessionEntry>()
@@ -46,9 +47,11 @@ function getSessionDir(conversationId: string, agentType: string): string {
   return dir
 }
 
-// 所有 agent 默认启用相同的 Pi 原生工具集：read + bash + grep + find + ls
-// orchestrator 不直接跑任务，不分配工具
-const DEFAULT_PI_TOOLS: string[] = ['read', 'bash', 'grep', 'find', 'ls']
+// 移除 Pi 原生 bash：它不经临智安全门，可执行任意命令且无审批/审计，构成提权面。
+// 命令执行改由已接入安全门的 python/node/run_skill_script LangChain 工具承担。
+// 保留 read/grep/find/ls（只读 FS，低风险）；注意这些 Pi 原生工具仍不经文件防护门，
+// 属已知残留——后续可改 noTools:'builtin' 完全禁用原生工具、仅用 gate 的 file_read/file_list。
+const DEFAULT_PI_TOOLS: string[] = ['read', 'grep', 'find', 'ls']
 
 const AGENT_PI_TOOLS: Record<string, string[] | undefined> = {
   general: DEFAULT_PI_TOOLS,
@@ -69,6 +72,7 @@ export interface CreateSessionOptions {
   noTools?: 'all' | 'builtin'  // 显式禁用
   cwd?: string  // 工作目录，决定 Pi 内置 bash/read/write 工具的执行目录；默认用 userData
   customTools?: Tool[]  // 临智的 LangChain 工具（含 MCP / 内置 / 自定义），转成 Pi customTools 注入
+  securityContextHolder?: SecurityContextHolder  // 注入到 customTools 闭包，供安全门读取当前审批/审计上下文
 }
 
 async function createSessionForProvider(
@@ -118,10 +122,10 @@ async function createSessionForProvider(
     }
   }
 
-  // 把临智的 LangChain 工具转成 Pi customTools
+  // 把临智的 LangChain 工具转成 Pi customTools（注入安全门 holder）
   // 这些工具（含 MCP / CATIA 等）通过 createAgentSession customTools 注入，与 Pi 原生工具并存
   const customTools = opts.customTools && opts.customTools.length > 0
-    ? toPiCustomTools(opts.customTools)
+    ? toPiCustomTools(opts.customTools, opts.securityContextHolder)
     : []
 
   // 持久化到 sessionDir；workspace 隔离靠 sessionDir 路径
@@ -165,7 +169,7 @@ export async function getOrCreateSession(
   conversationId: string,
   agentType: string,
   opts: { systemPrompt: string; provider?: PiProvider; tools?: string[]; noTools?: 'all' | 'builtin'; cwd?: string; customTools?: Tool[] }
-): Promise<any> {
+): Promise<{ session: any; securityContextHolder: SecurityContextHolder }> {
   const key = sessionKey(conversationId, agentType)
   const requestedProvider = opts.provider || 'deepseek'
 
@@ -183,7 +187,7 @@ export async function getOrCreateSession(
     existing.cwd === opts.cwd &&
     existing.customToolNames === customToolNames
   ) {
-    return existing.session
+    return { session: existing.session, securityContextHolder: existing.securityContextHolder }
   }
   if (existing) {
     try { existing.session.dispose() } catch {}
@@ -194,8 +198,13 @@ export async function getOrCreateSession(
     ? await getOllamaModelContext()
     : await getModelContext()
 
+  // 为本次 session 创建 holder：与 customTools 闭包共享引用，
+  // runner 在每次 session.prompt() 前更新 holder.current（含当轮 messageId/审批 setState）
+  const securityContextHolder: SecurityContextHolder = { current: null }
+
   const internalOpts: CreateSessionOptionsInternal = {
     ...opts,
+    securityContextHolder,
     __conversationId: conversationId,
     __agentType: agentType
   }
@@ -206,10 +215,11 @@ export async function getOrCreateSession(
     systemPrompt: opts.systemPrompt,
     provider: requestedProvider,
     cwd: opts.cwd,
-    customToolNames
+    customToolNames,
+    securityContextHolder
   })
   console.log(`[Pi] Session created for ${key} (provider=${requestedProvider}, cwd=${opts.cwd || '(default)'}, customTools=${customToolNames || 'none'})`)
-  return session
+  return { session, securityContextHolder }
 }
 
 export async function abortSession(conversationId: string, agentType: string): Promise<void> {

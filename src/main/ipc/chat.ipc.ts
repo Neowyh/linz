@@ -8,6 +8,7 @@ import { parseFile, formatAttachmentContent, type ParsedAttachment } from '../pa
 import type { ToolCallData, StepProgressData, PanelCommandPayload } from '../agents/base.agent'
 import { StepMarkerStream, PanelMarkerStream } from '../agents/base.agent'
 import type { SkillTriggerInfo } from '../agents/agent-skills.service'
+import { getEventBridge } from '../dsh'
 
 let mainWindowRef: BrowserWindow | null = null
 let currentAbortController: AbortController | null = null
@@ -63,11 +64,15 @@ export function registerChatIPC(mainWindow: BrowserWindow): void {
         tokens: userTokenEstimate
       })
 
+      // DSH 兼容层：发射 user/message 事件
+      getEventBridge()?.onUserMessage(conversationId, content)
+
       // 更新对话标题（如果是第一条消息）
       const conv = convRepo.getById(conversationId)
       if (conv && conv.title === '新对话') {
         const title = content.length > 30 ? content.substring(0, 30) + '...' : content
         convRepo.updateTitle(conversationId, title)
+        getEventBridge()?.onTitleChanged(conversationId, title)
       }
 
       // 获取 Agent 引擎并处理
@@ -143,6 +148,14 @@ export function registerChatIPC(mainWindow: BrowserWindow): void {
           win?.webContents.send('agent:message', chunk.agentMessage)
         }
 
+        // DSH 兼容层：发射 assistant 文本增量 + tool call 事件
+        if (cleanText) {
+          getEventBridge()?.onAgentText(conversationId, cleanText)
+        }
+        if (chunk.toolCall && chunk.toolCall.isComplete !== false) {
+          getEventBridge()?.onToolCall(conversationId, chunk.toolCall)
+        }
+
         // 聚合内容（跳过执行中占位；完成的工具调用按 toolCallId 去重更新）
         let msgData = agentMessages.get(chunk.messageId)
         if (!msgData && (chunk.content || chunk.toolCall || chunk.skillTriggers)) {
@@ -214,6 +227,8 @@ export function registerChatIPC(mainWindow: BrowserWindow): void {
               })
               // 记录输出 token 使用量
               addTokenUsage(0, outputTokens)
+              // DSH 兼容层：发射 assistant/message + turn/end 事件
+              getEventBridge()?.onTurnEnd(conversationId, chunk.messageId)
             }
             agentMessages.delete(chunk.messageId)
           }

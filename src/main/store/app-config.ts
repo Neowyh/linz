@@ -1,4 +1,5 @@
 import Store from 'electron-store'
+import { safeStorage } from 'electron'
 import { v4 as uuidv4 } from 'uuid'
 
 export interface TokenBudget {
@@ -37,7 +38,8 @@ export interface Workspace {
 }
 
 interface AppConfigSchema {
-  apiKey: string
+  apiKey: string          // 废弃：旧版明文存储，仅保留以读取迁移；新写入走 apiKeyCipher
+  apiKeyCipher: string    // safeStorage 加密后的密文（base64），优先读取；空串表示未设置
   modelProvider: string
   modelName: string
   baseURL: string
@@ -67,6 +69,7 @@ let appConfig: Store<AppConfigSchema>
 
 const defaults: AppConfigSchema = {
   apiKey: '',
+  apiKeyCipher: '',
   modelProvider: 'deepseek',
   modelName: 'deepseek-chat',
   baseURL: 'https://api.deepseek.com',
@@ -108,6 +111,45 @@ export function getAppConfig(): Store<AppConfigSchema> {
     })
   }
   return appConfig
+}
+
+// API Key 使用 Electron safeStorage（Windows 走 DPAPI）加密后落盘，避免明文存储。
+// 优先读取加密密文 apiKeyCipher 并解密；首次升级时把旧明文 apiKey 迁移为密文并清除明文。
+// safeStorage 不可用时（极少数环境）回退明文 apiKey 并告警。
+export function getApiKeyDecrypted(): string {
+  const config = getAppConfig()
+  const cipher = config.get('apiKeyCipher') as string | undefined
+  if (cipher) {
+    try {
+      return safeStorage.decryptString(Buffer.from(cipher, 'base64'))
+    } catch (err) {
+      console.warn('[Config] API key 解密失败，回退明文:', err)
+    }
+  }
+  // 迁移旧版明文 apiKey → 加密密文（仅首次）
+  const plain = (config.get('apiKey') as string) || ''
+  if (plain && safeStorage.isEncryptionAvailable()) {
+    setApiKeyEncrypted(plain)
+  }
+  return plain
+}
+
+export function setApiKeyEncrypted(plain: string): void {
+  const config = getAppConfig()
+  if (!plain) {
+    config.set('apiKeyCipher', '')
+    config.delete('apiKey')
+    return
+  }
+  if (safeStorage.isEncryptionAvailable()) {
+    const encrypted = safeStorage.encryptString(plain)
+    config.set('apiKeyCipher', encrypted.toString('base64'))
+    // 清除旧明文，避免密钥同时以明文落盘
+    config.delete('apiKey')
+  } else {
+    console.warn('[Config] safeStorage 不可用，API key 仍以明文存储')
+    config.set('apiKey', plain)
+  }
 }
 
 function getCurrentMonthKey(): string {

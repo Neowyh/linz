@@ -168,6 +168,12 @@ const api = {
     },
     set: (key: string, value: any): Promise<{ success: boolean }> => {
       return ipcRenderer.invoke('settings:set', key, value)
+    },
+    getApiKey: (): Promise<string> => {
+      return ipcRenderer.invoke('settings:getApiKey')
+    },
+    setApiKey: (key: string): Promise<{ success: boolean }> => {
+      return ipcRenderer.invoke('settings:setApiKey', key)
     }
   },
 
@@ -619,6 +625,30 @@ const api = {
       ipcRenderer.on('menu:action', handler)
       return () => {
         ipcRenderer.removeListener('menu:action', handler)
+      }
+    }
+  },
+
+  dsh: {
+    getPort: (): Promise<number> => {
+      return ipcRenderer.invoke('dsh:getPort')
+    },
+    getConfig: (): Promise<{ port: number; preloadPath: string }> => {
+      return ipcRenderer.invoke('dsh:getConfig')
+    },
+    listPlugins: (): Promise<Array<{ name: string; version: string; packageDir: string }>> => {
+      return ipcRenderer.invoke('dsh:listPlugins')
+    },
+    installPlugin: (packageDir: string): Promise<{ success: boolean; name?: string; error?: string }> => {
+      return ipcRenderer.invoke('dsh:installPlugin', packageDir)
+    },
+    onOpenSessionRequest: (callback: (sessionId: string) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, sessionId: string): void => {
+        callback(sessionId)
+      }
+      ipcRenderer.on('dsh:openSessionRequest', handler)
+      return () => {
+        ipcRenderer.removeListener('dsh:openSessionRequest', handler)
       }
     }
   }

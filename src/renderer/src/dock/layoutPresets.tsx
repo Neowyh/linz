@@ -101,7 +101,8 @@ const PANEL_COLOR: Record<PanelTypeId, string> = {
   kb: '#722ED1',
   viewer3d: '#08979C',
   field: '#389E0D',
-  sql: '#CF1322'
+  sql: '#CF1322',
+  synapse: '#531dAB'
 }
 
 // —— 布局构建 ——

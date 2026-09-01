@@ -9,6 +9,7 @@ export type PanelTypeId =
   | 'viewer3d'
   | 'field'
   | 'sql'
+  | 'synapse'
 
 export type PanelRuntime = 'native' | 'webview' | 'pty' | 'webgl'
 
