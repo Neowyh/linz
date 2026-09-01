@@ -54,7 +54,15 @@ export function buildHostPage(pluginRoute: string): string {
         // Hide the 对话/会话地图 view switch toggle
         '.view-switch { display: none !important; }' +
         // Hide all "在 DSH 中打开" / "DSH" buttons
-        '[data-action="open-dsh"] { display: none !important; }';
+        '[data-action="open-dsh"] { display: none !important; }' +
+        // Hide canvas tabs (地图/详情 switcher) — only show the map
+        '.canvas-tabs { display: none !important; }' +
+        // Hide "详情" button in card footer (opens detail/thread view)
+        'footer [data-action="show-thread"] { display: none !important; }' +
+        // Make card title non-interactive: clicks pass through to the card body,
+        // which opens the card inspector + switches conversation via activate-session,
+        // instead of opening the detail/thread view
+        '.thread-title { pointer-events: none !important; }';
       doc.head.appendChild(style);
     } catch (e) {
       console.warn('[DSH Host] CSS injection failed:', e);
