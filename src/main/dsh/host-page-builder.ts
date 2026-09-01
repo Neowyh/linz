@@ -40,16 +40,21 @@ export function buildHostPage(pluginRoute: string): string {
     }
   }
 
-  // ── CSS injection: hide the SPA's left sidebar ───────────
-  function injectSidebarHide() {
+  // ── CSS injection: hide sidebar, view switch, and DSH buttons ──
+  function injectStyleOverrides() {
     try {
       var doc = frame.contentDocument;
       if (!doc) return;
       var style = doc.createElement('style');
       style.textContent =
+        // Hide left sidebar and collapse the grid
         '.synapse-shell { grid-template-columns: 1fr !important; }' +
         '.sidebar { display: none !important; }' +
-        '.topbar, .main-stage { grid-column: 1 !important; }';
+        '.topbar, .main-stage { grid-column: 1 !important; }' +
+        // Hide the 对话/会话地图 view switch toggle
+        '.view-switch { display: none !important; }' +
+        // Hide all "在 DSH 中打开" / "DSH" buttons
+        '[data-action="open-dsh"] { display: none !important; }';
       doc.head.appendChild(style);
     } catch (e) {
       console.warn('[DSH Host] CSS injection failed:', e);
@@ -99,7 +104,7 @@ export function buildHostPage(pluginRoute: string): string {
   // ── Iframe load handler ───────────────────────────────────
 
   frame.addEventListener('load', function() {
-    injectSidebarHide();
+    injectStyleOverrides();
     // Tell the SPA the map is open so it initializes
     send('synapse:map-opened');
     pushInitialData();
