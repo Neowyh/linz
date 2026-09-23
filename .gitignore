@@ -17,3 +17,9 @@ resources/bin/win32/poppler/
 # Generated version manifests — produced by scripts/gen-manifest.cjs
 resources/installed-manifest.json
 manifest.json
+manifest-1.0.0.json
+
+# Large binaries — not tracked in git
+win7-verify.zip
+update-full-*.linzpatch
+resources/bin/win32/pandoc.exe
