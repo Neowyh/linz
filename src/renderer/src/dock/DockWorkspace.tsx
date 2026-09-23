@@ -7,9 +7,9 @@ import { useUIStore } from '../stores/uiStore'
 import type { DockNode, SplitNode } from './types'
 
 function flexFor(index: number, count: number, ratio: number): React.CSSProperties {
-  if (count === 1) return { flex: '1 1 0%' }
-  if (index === 0) return { flex: `${ratio} 1 0%` }
-  return { flex: `${(1 - ratio) / (count - 1)} 1 0%` }
+  if (count === 1) return { flexGrow: 1, flexShrink: 1, flexBasis: '0%' }
+  if (index === 0) return { flexGrow: ratio, flexShrink: 1, flexBasis: '0%' }
+  return { flexGrow: (1 - ratio) / (count - 1), flexShrink: 1, flexBasis: '0%' }
 }
 
 function SplitDivider({ splitId, direction }: { splitId: string; direction: 'row' | 'col' }): JSX.Element {
@@ -72,9 +72,12 @@ function SplitDivider({ splitId, direction }: { splitId: string; direction: 'row
 
 const Split = memo(function SplitTransform({ split }: { split: SplitNode }): JSX.Element {
   const byId = useDockStore((s) => s.layout.byId)
+  const rootId = useDockStore((s) => s.layout.rootId)
+  const companionVisible = useUIStore((s) => s.companionPanesVisible)
   const children = split.children.map((id) => byId[id]).filter(Boolean) as DockNode[]
   const direction = split.direction
   const count = children.length
+  const isTopRowSplit = split.id === rootId && direction === 'row'
 
   return (
     <div
@@ -82,17 +85,26 @@ const Split = memo(function SplitTransform({ split }: { split: SplitNode }): JSX
         direction === 'row' ? 'flex-row' : 'flex-col'
       }`}
     >
-      {children.map((child, i) => (
-        <Fragment key={child.id}>
-          {i > 0 && <SplitDivider splitId={split.id} direction={direction} />}
-          <div
-            className={direction === 'row' ? 'h-full min-w-0 min-h-0' : 'w-full min-w-0 min-h-0'}
-            style={flexFor(i, count, split.ratio)}
-          >
-            <NodeRenderer node={child} />
-          </div>
-        </Fragment>
-      ))}
+      {children.map((child, i) => {
+        // 顶层行分割的非首子节点 = 右侧伴生窗格；收起时 flex-grow 归零实现滑动隐藏
+        const collapsed = !companionVisible && isTopRowSplit && i > 0
+        return (
+          <Fragment key={child.id}>
+            {i > 0 && !collapsed && <SplitDivider splitId={split.id} direction={direction} />}
+            <div
+              className={`${direction === 'row' ? 'h-full' : 'w-full'} min-w-0 min-h-0 overflow-hidden`}
+              style={{
+                ...(collapsed
+                  ? { flexGrow: 0, flexShrink: 0, flexBasis: '0%' }
+                  : flexFor(i, count, split.ratio)),
+                transition: 'flex-grow 0.2s ease-in-out'
+              }}
+            >
+              <NodeRenderer node={child} />
+            </div>
+          </Fragment>
+        )
+      })}
     </div>
   )
 })
@@ -105,7 +117,6 @@ function NodeRenderer({ node }: { node: DockNode }): JSX.Element {
 export default function DockWorkspace(): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const root = useDockStore((s) => (s.layout.rootId ? s.layout.byId[s.layout.rootId] : null))
-  const companionVisible = useUIStore((s) => s.companionPanesVisible)
   const setContainerOrigin = useDockStore((s) => s.setContainerOrigin)
 
   // 上报容器原点，供窗格内容盒换算相对 rect
@@ -122,16 +133,17 @@ export default function DockWorkspace(): JSX.Element {
     return () => ro.disconnect()
   }, [setContainerOrigin])
 
-  if (!root || !companionVisible) {
+  // 无布局时直接渲染聊天；有布局时始终渲染拆分树（右侧窗格的显隐由 Split 内部 flex 过渡处理）
+  if (!root) {
     return (
-      <div ref={containerRef} className="flex-1 h-full min-w-0 relative overflow-hidden bg-[#F4F6FA]">
+      <div ref={containerRef} className="flex-1 h-full min-w-0 relative overflow-hidden" style={{ background: 'var(--content-bg, #F4F6FA)' }}>
         <Outlet />
       </div>
     )
   }
 
   return (
-    <div ref={containerRef} className="flex-1 h-full min-w-0 relative overflow-hidden bg-[#F4F6FA]">
+    <div ref={containerRef} className="flex-1 h-full min-w-0 relative overflow-hidden" style={{ background: 'var(--content-bg, #F4F6FA)' }}>
       <NodeRenderer node={root} />
       <InstanceHostOverlay />
     </div>

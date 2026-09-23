@@ -133,7 +133,7 @@ export default function Sidebar(): JSX.Element {
   }
 
   return (
-    <div className="w-[260px] min-w-[260px] h-full flex flex-col bg-white border-r border-line text-gray-700">
+    <div className="w-[260px] min-w-[260px] h-full flex flex-col border-r border-line text-gray-700" style={{ background: 'var(--sidebar-bg, #FFFFFF)' }}>
       {/* Logo */}
       <div className="px-5 py-4 flex items-center gap-2.5">
         <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center shadow-card">

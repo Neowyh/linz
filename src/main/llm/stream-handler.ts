@@ -9,6 +9,7 @@ import { resolveDecision, rememberApproval, summarizeArgs } from '../agents/tool
 import { approvalManager } from '../security/approval-manager'
 import { writeAudit } from '../security/audit'
 import { getBlockedByArgs } from '../security/file-protection'
+import { getAppConfig } from '../store/app-config'
 
 export interface StreamOptions {
   systemPrompt: string
@@ -41,8 +42,13 @@ const TOOL_TIMEOUT_OVERRIDES: Record<string, number> = {
   html_to_word: 30 * 60 * 1000,
   browser: 180_000
 }
-// 多轮工具调用最大轮数（防止 LLM 陷入死循环）
-const MAX_TOOL_ROUNDS = 100
+// 多轮工具调用最大轮数（防止 LLM 陷入死循环）：从应用配置读取，默认 100，设置页可调。
+// 缺失/非法值回退默认；夹紧到 1..1000 防止异常值导致死循环或误填超大数。
+function getMaxToolRounds(): number {
+  const raw = getAppConfig().get('maxToolRounds') as number | undefined
+  const n = typeof raw === 'number' && Number.isFinite(raw) ? raw : 100
+  return Math.max(1, Math.min(1000, Math.floor(n)))
+}
 
 async function createStream(llm: ChatOpenAI, messages: BaseMessage[], signal?: AbortSignal) {
   return await llm.stream(messages, signal ? { signal } : undefined)
@@ -96,15 +102,17 @@ async function executeToolCalls(
   for (const tc of toolCalls) {
     // 工具循环中检查 abort，避免 abort 后继续执行剩余工具
     if (signal?.aborted) break
+    // 字符串化必须先于"工具未找到"分支：否则该分支会用原始对象 tc.args 作 input，
+    // 一路透传到渲染层触发 React "Objects are not valid as a React child" (#31) 白屏
+    const input = typeof tc.args === 'string' ? tc.args : JSON.stringify(tc.args)
     const tool = toolMap.get(tc.name)
     if (!tool) {
       const errorMsg = `工具 ${tc.name} 未找到`
       messages.push(new ToolMessage({ content: errorMsg, tool_call_id: tc.id! }))
-      results.push({ type: 'tool_call', tool: tc.name, input: tc.args, output: errorMsg })
+      results.push({ type: 'tool_call', tool: tc.name, input, output: errorMsg })
       continue
     }
 
-    const input = typeof tc.args === 'string' ? tc.args : JSON.stringify(tc.args)
     const args = tc.args && typeof tc.args === 'object' ? tc.args : safeParseArgs(tc.args)
 
     // 策略决策只算一次（指纹+risk+配置查询），下述文件防护审计与执行后审计均复用
@@ -390,8 +398,9 @@ export async function* streamChat(
 
   // 多轮工具调用循环：LLM 调用工具 → 执行工具 → 把结果回传 LLM → LLM 可能再次调用工具
   // 直到 LLM 不再调用工具，或达到最大轮数
+  const maxToolRounds = getMaxToolRounds()
   let round = 0
-  while (toolCalls.length > 0 && hasTools && round < MAX_TOOL_ROUNDS) {
+  while (toolCalls.length > 0 && hasTools && round < maxToolRounds) {
     // 每轮开始前检查 abort，避免 abort 后继续发起 LLM 调用和工具执行
     if (options.signal?.aborted) {
       break
@@ -491,7 +500,7 @@ export async function* streamChat(
     }
   }
 
-  if (round >= MAX_TOOL_ROUNDS && toolCalls.length > 0) {
-    yield `\n\n> ⚠️ 已达到最大工具调用轮数 (${MAX_TOOL_ROUNDS})，停止继续调用。\n\n`
+  if (round >= maxToolRounds && toolCalls.length > 0) {
+    yield `\n\n> ⚠️ 已达到最大工具调用轮数 (${maxToolRounds})，停止继续调用。\n\n`
   }
 }

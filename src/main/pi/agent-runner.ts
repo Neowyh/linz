@@ -21,7 +21,7 @@ import { isOllamaAvailable } from '../llm'
 import { getAppConfig } from '../store/app-config'
 import type { Tool } from '@langchain/core/tools'
 import type { StreamChunk, AgentContext, AgentStatusData, AgentState, SecurityContext } from '../agents/base.agent'
-import type { SecurityContextHolder } from './tool-adapter'
+import type { SecurityContextHolder, ImageSinkHolder } from './tool-adapter'
 
 // 简单 AsyncQueue：把 push-based 回调转成 pull-based AsyncGenerator
 class AsyncQueue<T> {
@@ -100,7 +100,7 @@ export async function* runWithPi(
   // 可用的只读文件工具（read/grep/find/ls）在 Windows 上通过 Git Bash/MSYS2 执行，
   // 模型容易误判为 Linux 环境。这里显式声明宿主系统，避免路径/命令风格混淆。
   // 注意：Pi 原生 bash 已禁用（不经安全门），命令执行请用 python/node/run_skill_script 工具。
-  const systemPromptWithHost = `${opts.systemPrompt}\n\n## 宿主环境\n本进程运行于 Windows（Electron 主进程，Node.js）。宿主操作系统是 Windows，文件路径使用反斜杠分隔（如 E:\\lijx\\...）。\n只读文件工具（read/grep/find/ls）在 Windows 上通过 Git Bash / MSYS2 执行，因此会看到 Unix 风格命令和 /e/lijx/... 形式的路径，但这只是 shell 模拟层，不是真正的 Linux 环境。\n需要执行命令或脚本时，请使用 python / node / run_skill_script 工具（首次执行需用户审批），不要尝试调用 bash。`
+  const systemPromptWithHost = `${opts.systemPrompt}\n\n## 宿主环境\n本进程运行于 Windows（Electron 主进程，Node.js）。宿主操作系统是 Windows，文件路径使用反斜杠分隔（如 E:\\lijx\\...）。\n文件读写请使用 file_read / file_list / file_write 工具（限于工作空间目录），代码审查请使用 code_tree / code_read / code_search 工具，均经安全审批门。\n需要执行命令或脚本时，请使用 python / node / run_skill_script 工具（首次执行需用户审批）。`
 
   // 组装安全上下文：与 DeepSeek 路径（base.agent.ts streamChat securityContext）对齐，
   // 供 customTools 安全门做审批/审计。messageId 用本路径生成的（驱动 UI 审批卡定位）。
@@ -153,6 +153,7 @@ async function* runWithPiPrompt(
   // 第一次尝试：DeepSeek（主模型）
   let session: any
   let holder: SecurityContextHolder = { current: null }
+  let imageSinkHolder: ImageSinkHolder = { push: null }
   try {
     const r = await getOrCreateSession(context.conversationId, opts.agentType, {
       systemPrompt: opts.systemPrompt,
@@ -164,6 +165,7 @@ async function* runWithPiPrompt(
     })
     session = r.session
     holder = r.securityContextHolder
+    imageSinkHolder = r.imageSinkHolder
   } catch (err: any) {
     // DeepSeek context 创建失败（如 Ollama 唯一可用）→ 直接走 Ollama
     if (isAbortError(err) || context.signal.aborted) return
@@ -185,6 +187,7 @@ async function* runWithPiPrompt(
       })
       session = r2.session
       holder = r2.securityContextHolder
+      imageSinkHolder = r2.imageSinkHolder
     } catch (err2: any) {
       yield makeErrorChunk(opts, `Pi 会话创建失败: ${err2?.message || err2}`)
       return
@@ -203,7 +206,7 @@ async function* runWithPiPrompt(
   // 注入当轮安全上下文到 holder（customTools 闭包读取它做审批/审计）
   holder.current = opts.securityContext ?? null
 
-  yield* driveSession(context, opts, session, holder)
+  yield* driveSession(context, opts, session, holder, imageSinkHolder)
 
   // 显式 abort 保底
   if (context.signal.aborted) {
@@ -215,10 +218,19 @@ async function* driveSession(
   context: AgentContext,
   opts: PromptRunOptions,
   session: any,
-  holder: SecurityContextHolder
+  holder: SecurityContextHolder,
+  imageSinkHolder: ImageSinkHolder
 ): AsyncGenerator<StreamChunk> {
   const queue = new AsyncQueue<PiStreamChunk>()
   const unsub = subscribeToSession(session, (chunk) => queue.push(chunk), context.signal)
+
+  // 工具剥离的 base64 图片通过 imageSink 推到对话流（与 DeepSeek 路径 stream-handler 一致），
+  // 图片以 markdown 形式展示给用户，base64 本身不进 Pi session 历史
+  imageSinkHolder.push = (images: string[]) => {
+    for (const img of images) {
+      queue.push({ content: `\n\n![图表](${img})\n\n` })
+    }
+  }
 
   // 包一层 retry：session.prompt() 内部走 fetch，重试逻辑同 LangChain 路径
   const promptPromise = (async () => {
@@ -258,6 +270,9 @@ async function* driveSession(
         const fallbackSession = fallbackResult.session
         // 新 session 有自己的 holder，注入当轮安全上下文后再 prompt
         fallbackResult.securityContextHolder.current = opts.securityContext ?? null
+        // 同步图片接收器：新 session 的 customTools 闭包绑定了新 imageSinkHolder，
+        // 需指向当前 queue，否则 fallback 后工具剥离的图片会丢失
+        fallbackResult.imageSinkHolder.push = imageSinkHolder.push
         // 先推一条提示给用户
         queue.push({ content: '\n\n⚠️ 云端模型不可用，已切换到本地 Ollama 模型...\n\n' })
         // 切换到新 session 的事件流：unsub 旧的，订阅新的
@@ -302,6 +317,7 @@ async function* driveSession(
       if (chunk.isComplete) break
     }
   } finally {
+    imageSinkHolder.push = null  // 清理：session 复用时不会被旧 queue 污染
     try { activeUnsubRef.unsub() } catch {}
     await promptPromise.catch(() => {})
   }

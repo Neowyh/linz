@@ -83,8 +83,8 @@ export default function InstanceHostOverlay(): JSX.Element | null {
           return (
             <div
               key={id}
-              className="absolute pointer-events-auto bg-white"
-              style={{ left: 0, top: 0, width: 0, height: 0, display: 'none' }}
+              className="absolute pointer-events-auto"
+              style={{ left: 0, top: 0, width: 0, height: 0, display: 'none', background: 'var(--pane-bg, #FFFFFF)' }}
             >
               <PanelContent instance={inst} />
             </div>
@@ -96,8 +96,8 @@ export default function InstanceHostOverlay(): JSX.Element | null {
         return (
           <div
             key={id}
-            className="absolute pointer-events-auto bg-white"
-            style={{ left: r.x, top: r.y, width: r.width, height: r.height, display: tabActive ? 'block' : 'none' }}
+            className="absolute pointer-events-auto"
+            style={{ left: r.x, top: r.y, width: r.width, height: r.height, display: tabActive ? 'block' : 'none', background: 'var(--pane-bg, #FFFFFF)' }}
           >
             <PanelContent instance={inst} />
           </div>

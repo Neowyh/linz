@@ -15,6 +15,15 @@ extraResources:
   # 打包后落在 <安装目录>/resources/skills/，DB 种子时通过 resolveBundledPath 定位
   - from: resources/skills
     to: skills
+  # 随包携带 DSH 插件（会话地图 SPA），首次启动时由 PluginLoader 复制到 userData/dsh-plugins/
+  # 打包后落在 <安装目录>/resources/dsh-plugins/dsh-synapse/
+  - from: resources/dsh-plugins
+    to: dsh-plugins
+  # 随包携带版本清单（补丁更新系统用），记录初始已安装版本
+  # 打包后落在 <安装目录>/resources/installed-manifest.json
+  # 由 scripts/gen-manifest.cjs 在打包后生成到此路径
+  - from: resources/installed-manifest.json
+    to: installed-manifest.json
 # 原生模块必须脱离 asar 打包（.node 二进制无法从 asar 加载）
 # sql.js 的 sql-wasm.wasm 也需脱离 asar，否则主进程加载 WASM 会失败（主对话库不可用）
 asarUnpack:

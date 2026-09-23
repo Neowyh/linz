@@ -24,6 +24,26 @@ function polyfillNode20Compat(): void {
   } catch {
     /* node:worker_threads 应当始终可用，忽略 */
   }
+  // diagnostics_channel.tracingChannel：Node 19+/20+ 引入，Electron 22 (Node 16.17.1) 缺失。
+  // lru-cache（pi-tui/pi-coding-agent 依赖）模块加载时顶层调用 tracingChannel('lru-cache')，
+  // 缺失则抛 "tracingChannel is not a function"。polyfill 为 no-op TracingChannel：
+  // hasSubscribers=false 使性能追踪路径短路，tracePromise/traceSync 直接执行原函数。
+  try {
+    const dc = require('node:diagnostics_channel')
+    if (typeof dc.tracingChannel !== 'function') {
+      dc.tracingChannel = function tracingChannel() {
+        return {
+          hasSubscribers: false,
+          tracePromise: async (fn: any) => fn(),
+          traceSync: (fn: any) => fn(),
+          subscribe: () => {},
+          unsubscribe: () => {}
+        }
+      }
+    }
+  } catch {
+    /* node:diagnostics_channel 应当始终可用，忽略 */
+  }
 }
 
 export async function ensurePi(): Promise<PiModule> {

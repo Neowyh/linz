@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Input, Select, Button, InputNumber, Switch, message, Typography, Spin, Card } from 'antd'
+import { Input, Select, Button, InputNumber, Switch, message, Typography, Spin, Card, Alert } from 'antd'
 import { ArrowLeftOutlined, SaveOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useAgentSkillStore } from '../stores/agentSkillStore'
@@ -21,6 +21,7 @@ export default function AgentSkillEditorPage(): JSX.Element {
   const [triggerKeywords, setTriggerKeywords] = useState<string[]>([])
   const [priority, setPriority] = useState(0)
   const [enabled, setEnabled] = useState(true)
+  const [isBuiltin, setIsBuiltin] = useState(false)
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(false)
 
@@ -43,6 +44,7 @@ export default function AgentSkillEditorPage(): JSX.Element {
         setTriggerKeywords(skill.trigger_keywords || [])
         setPriority(skill.priority || 0)
         setEnabled(skill.enabled)
+        setIsBuiltin(Boolean(skill.is_builtin))
       }
     } catch (err) {
       message.error('加载技能失败')
@@ -62,18 +64,32 @@ export default function AgentSkillEditorPage(): JSX.Element {
     }
     setSaving(true)
     try {
-      const params = {
-        name: name.trim(),
-        description: description.trim(),
-        content,
-        targetAgents,
-        triggerKeywords,
-        priority,
-        enabled
+      let result: { success: boolean; error?: string; skill?: unknown }
+      if (isEditing) {
+        // 内置技能的知识内容只读，仅提交目标 Agent / 关键词 / 优先级 / 启用
+        const updates: Record<string, unknown> = {
+          targetAgents,
+          triggerKeywords,
+          priority,
+          enabled
+        }
+        if (!isBuiltin) {
+          updates.name = name.trim()
+          updates.description = description.trim()
+          updates.content = content
+        }
+        result = await updateSkill(id!, updates)
+      } else {
+        result = await createSkill({
+          name: name.trim(),
+          description: description.trim(),
+          content,
+          targetAgents,
+          triggerKeywords,
+          priority,
+          enabled
+        })
       }
-      const result = isEditing
-        ? await updateSkill(id!, params as Record<string, unknown>)
-        : await createSkill(params)
       if (result.success) {
         message.success(isEditing ? '技能已更新' : '技能已创建')
         navigate('/agents')
@@ -119,6 +135,15 @@ export default function AgentSkillEditorPage(): JSX.Element {
         </div>
 
         <Card title={isEditing ? '编辑技能' : '创建技能'} className="shadow-sm">
+          {isBuiltin && (
+            <Alert
+              type="info"
+              showIcon
+              message="内置技能"
+              description="内置技能的知识内容（名称、描述、正文）不可修改，但你可以调整它的目标 Agent、触发关键词与优先级，以适配你的工作流。"
+              className="mb-4"
+            />
+          )}
           <div className="space-y-4">
             <div>
               <Text className="block mb-1 text-sm">名称 *</Text>
@@ -127,6 +152,7 @@ export default function AgentSkillEditorPage(): JSX.Element {
                 onChange={(e) => setName(e.target.value)}
                 placeholder="例如：翼型分析流程"
                 maxLength={50}
+                disabled={isBuiltin}
               />
             </div>
 
@@ -138,6 +164,7 @@ export default function AgentSkillEditorPage(): JSX.Element {
                 placeholder="简短描述技能用途"
                 rows={2}
                 maxLength={200}
+                disabled={isBuiltin}
               />
             </div>
 
@@ -182,6 +209,7 @@ export default function AgentSkillEditorPage(): JSX.Element {
                 }
                 rows={12}
                 className="font-mono text-sm"
+                disabled={isBuiltin}
               />
               <div className="flex items-center justify-between mt-1">
                 <Text type="secondary" className="text-xs">

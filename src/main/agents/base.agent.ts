@@ -3,7 +3,8 @@ import type { Tool } from '@langchain/core/tools'
 import { formatSkillsForPrompt, resolveEffectiveSkills, type SkillTriggerInfo } from './agent-skills.service'
 import { createChatModel } from '../llm'
 import { streamChat } from '../llm/stream-handler'
-import { ensurePi } from '../pi'
+import { stripDataUrlImages } from '../llm/image-protocol'
+import { ensurePi, getPiLoadError } from '../pi'
 import { runWithPi } from '../pi/agent-runner'
 
 export type BuiltinAgentType = 'orchestrator' | 'general' | 'aero' | 'structural' | 'propulsion' | 'avionics' | 'simulation' | 'documentation' | 'retriever'
@@ -396,12 +397,14 @@ export function buildChatHistory(context: AgentContext): Array<import('@langchai
   return (context.chatHistory || [])
     .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'agent' || m.role === 'system')
     .map((m) => {
-      if (m.role === 'user') return new HumanMessage(m.content)
+      // 兜底剥离 data-URL 图片 base64：防止历史中的 base64（旧数据/其他路径泄漏）回传 LLM
+      const content = stripDataUrlImages(m.content)
+      if (m.role === 'user') return new HumanMessage(content)
       // system 角色用 SystemMessage（压缩摘要等），不要 fall through 到 AIMessage
-      if (m.role === 'system') return new SystemMessage(m.content)
+      if (m.role === 'system') return new SystemMessage(content)
       // agent/assistant 消息带 agent_type 标签，让 LLM 知道是哪个 agent 说的
       const label = m.agent_type ? `[${m.agent_type}] ` : ''
-      return new AIMessage(label + m.content)
+      return new AIMessage(label + content)
     })
 }
 
@@ -539,8 +542,22 @@ export abstract class BaseAgent implements IAgent {
       return
     }
 
+    // 配置了 Pi 引擎但 SDK 加载失败 → 静默回退 DeepSeek，给用户一条可见提示
+    // （本就配 DeepSeek 的 agent 不提示，避免噪声）
+    if (this.config.engine === 'pi') {
+      const errInfo = getPiLoadError()
+      yield {
+        messageId,
+        agentType: this.config.type,
+        content: `⚠️ Pi 引擎不可用${errInfo ? `（${errInfo}）` : ''}，已回退到 DeepSeek 引擎。\n\n`,
+        isComplete: false
+      }
+    }
+
     // DeepSeek + LangChain 路径
-    const llm = createChatModel({ modelName: this.config.modelName })
+    // 不传 modelName override，让 createChatModel 走 getLLMConfig() 读取用户全局配置，
+    // 避免各 agent 的 config.modelName（DB 种子默认 'deepseek-chat'）覆盖用户设置的模型名
+    const llm = createChatModel()
     const tools = this.getAvailableTools(context)
 
     const stream = streamChat(llm, {

@@ -11,7 +11,7 @@ import * as fs from 'fs'
 import { ensurePi } from './index'
 import { getModelContext, getOllamaModelContext, type ModelContext, type PiProvider } from './model-context'
 import { getCurrentWorkspace } from '../store/app-config'
-import { toPiCustomTools, type SecurityContextHolder } from './tool-adapter'
+import { toPiCustomTools, type SecurityContextHolder, type ImageSinkHolder } from './tool-adapter'
 import type { Tool } from '@langchain/core/tools'
 
 interface SessionEntry {
@@ -21,6 +21,7 @@ interface SessionEntry {
   cwd?: string
   customToolNames: string  // 工具名有序串指纹，用于复用判定（比数量更严，工具内容变化也触发重建）
   securityContextHolder: SecurityContextHolder  // customTools 闭包绑定的 holder，runner 每次 prompt 前更新 .current
+  imageSinkHolder: ImageSinkHolder  // customTools 闭包绑定的图片接收器，runner 每次 driveSession 更新 .push
 }
 
 const sessions = new Map<string, SessionEntry>()
@@ -47,23 +48,11 @@ function getSessionDir(conversationId: string, agentType: string): string {
   return dir
 }
 
-// 移除 Pi 原生 bash：它不经临智安全门，可执行任意命令且无审批/审计，构成提权面。
-// 命令执行改由已接入安全门的 python/node/run_skill_script LangChain 工具承担。
-// 保留 read/grep/find/ls（只读 FS，低风险）；注意这些 Pi 原生工具仍不经文件防护门，
-// 属已知残留——后续可改 noTools:'builtin' 完全禁用原生工具、仅用 gate 的 file_read/file_list。
-const DEFAULT_PI_TOOLS: string[] = ['read', 'grep', 'find', 'ls']
-
-const AGENT_PI_TOOLS: Record<string, string[] | undefined> = {
-  general: DEFAULT_PI_TOOLS,
-  aero: DEFAULT_PI_TOOLS,
-  structural: DEFAULT_PI_TOOLS,
-  propulsion: DEFAULT_PI_TOOLS,
-  avionics: DEFAULT_PI_TOOLS,
-  simulation: DEFAULT_PI_TOOLS,
-  documentation: DEFAULT_PI_TOOLS,
-  retriever: DEFAULT_PI_TOOLS,
-  orchestrator: undefined  // 协调器不直接跑任务，无需工具
-}
+// 禁用 Pi 所有原生工具（bash/read/grep/find/ls）：它们不经临智中央安全门
+// （permission.service / approvalManager / getBlockedByArgs），构成未经审批/审计的文件访问面。
+// 文件操作改由已接入安全门的 customTools 承担：file_read/file_list/file_write（工作空间内）
+// 与 code_tree/code_read/code_search（代码审查），均经路径校验与审批门。
+// 配置优先级：显式 noTools > 显式 tools > 默认 noTools:'builtin'（见 createSessionForProvider）。
 
 export interface CreateSessionOptions {
   systemPrompt: string
@@ -73,6 +62,7 @@ export interface CreateSessionOptions {
   cwd?: string  // 工作目录，决定 Pi 内置 bash/read/write 工具的执行目录；默认用 userData
   customTools?: Tool[]  // 临智的 LangChain 工具（含 MCP / 内置 / 自定义），转成 Pi customTools 注入
   securityContextHolder?: SecurityContextHolder  // 注入到 customTools 闭包，供安全门读取当前审批/审计上下文
+  imageSinkHolder?: ImageSinkHolder  // 注入到 customTools 闭包，工具剥离的图片通过此 sink 推给 runner
 }
 
 async function createSessionForProvider(
@@ -114,18 +104,14 @@ async function createSessionForProvider(
       toolsOption = { tools: opts.tools }
     }
   } else {
-    const defaultTools = AGENT_PI_TOOLS[agentType] ?? DEFAULT_PI_TOOLS
-    if (defaultTools.length > 0) {
-      toolsOption = { tools: defaultTools }
-    } else {
-      toolsOption = { noTools: 'all' }
-    }
+    // 默认禁用 Pi 原生工具（不经安全门），仅用 customTools
+    toolsOption = { noTools: 'builtin' }
   }
 
   // 把临智的 LangChain 工具转成 Pi customTools（注入安全门 holder）
   // 这些工具（含 MCP / CATIA 等）通过 createAgentSession customTools 注入，与 Pi 原生工具并存
   const customTools = opts.customTools && opts.customTools.length > 0
-    ? toPiCustomTools(opts.customTools, opts.securityContextHolder)
+    ? toPiCustomTools(opts.customTools, opts.securityContextHolder, opts.imageSinkHolder)
     : []
 
   // 持久化到 sessionDir；workspace 隔离靠 sessionDir 路径
@@ -169,7 +155,7 @@ export async function getOrCreateSession(
   conversationId: string,
   agentType: string,
   opts: { systemPrompt: string; provider?: PiProvider; tools?: string[]; noTools?: 'all' | 'builtin'; cwd?: string; customTools?: Tool[] }
-): Promise<{ session: any; securityContextHolder: SecurityContextHolder }> {
+): Promise<{ session: any; securityContextHolder: SecurityContextHolder; imageSinkHolder: ImageSinkHolder }> {
   const key = sessionKey(conversationId, agentType)
   const requestedProvider = opts.provider || 'deepseek'
 
@@ -187,7 +173,7 @@ export async function getOrCreateSession(
     existing.cwd === opts.cwd &&
     existing.customToolNames === customToolNames
   ) {
-    return { session: existing.session, securityContextHolder: existing.securityContextHolder }
+    return { session: existing.session, securityContextHolder: existing.securityContextHolder, imageSinkHolder: existing.imageSinkHolder }
   }
   if (existing) {
     try { existing.session.dispose() } catch {}
@@ -201,10 +187,13 @@ export async function getOrCreateSession(
   // 为本次 session 创建 holder：与 customTools 闭包共享引用，
   // runner 在每次 session.prompt() 前更新 holder.current（含当轮 messageId/审批 setState）
   const securityContextHolder: SecurityContextHolder = { current: null }
+  // 图片接收器：runner 每次 driveSession 时更新 push，把工具剥离的图片推到当前对话流
+  const imageSinkHolder: ImageSinkHolder = { push: null }
 
   const internalOpts: CreateSessionOptionsInternal = {
     ...opts,
     securityContextHolder,
+    imageSinkHolder,
     __conversationId: conversationId,
     __agentType: agentType
   }
@@ -216,10 +205,11 @@ export async function getOrCreateSession(
     provider: requestedProvider,
     cwd: opts.cwd,
     customToolNames,
-    securityContextHolder
+    securityContextHolder,
+    imageSinkHolder
   })
   console.log(`[Pi] Session created for ${key} (provider=${requestedProvider}, cwd=${opts.cwd || '(default)'}, customTools=${customToolNames || 'none'})`)
-  return { session, securityContextHolder }
+  return { session, securityContextHolder, imageSinkHolder }
 }
 
 export async function abortSession(conversationId: string, agentType: string): Promise<void> {

@@ -18,3 +18,18 @@ export function extractImageBlocks(text: string): { cleanText: string; images: s
   })
   return { cleanText: cleanText.trim(), images }
 }
+
+// markdown 图片中的 data URL（base64）：![alt](data:image/png;base64,...)
+const MARKDOWN_DATA_URL_IMAGE_RE = /!\[[^\]]*\]\(data:image\/[^)]+\)/g
+// 裸 data URL（未包裹在 markdown 图片语法中）
+const BARE_DATA_URL_RE = /data:image\/[a-z+.-]+;base64,[A-Za-z0-9+/=]+/g
+
+// 剥离文本中的 data URL 图片，替换为占位标记。
+// 用于持久化与历史重建，避免数 MB 的 base64 写入 DB 或回传 LLM 撑爆上下文。
+// 图片本身已在对话流中展示给用户，历史中只需保留文字指代。
+export function stripDataUrlImages(text: string): string {
+  if (!text) return text
+  return text
+    .replace(MARKDOWN_DATA_URL_IMAGE_RE, '[图片]')
+    .replace(BARE_DATA_URL_RE, '[图片]')
+}

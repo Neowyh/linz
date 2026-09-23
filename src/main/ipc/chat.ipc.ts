@@ -1,8 +1,8 @@
 import { ipcMain, BrowserWindow } from 'electron'
 import { getAgentEngine } from '../agents'
 import { getMessagesRepo, getConversationsRepo } from '../database'
-import { isOverBudget, getBudgetPercentage, addTokenUsage, getAppConfig, getCurrentMonthUsage, getFileWorkspacePath } from '../store/app-config'
-import { estimateTokens } from '../llm'
+import { getFileWorkspacePath } from '../store/app-config'
+import { estimateTokens, stripDataUrlImages } from '../llm'
 import { v4 as uuidv4 } from 'uuid'
 import { parseFile, formatAttachmentContent, type ParsedAttachment } from '../parsers'
 import type { ToolCallData, StepProgressData, PanelCommandPayload } from '../agents/base.agent'
@@ -33,25 +33,11 @@ export function registerChatIPC(mainWindow: BrowserWindow): void {
     const win = getMainWindow()
 
     try {
-      // Token 预算检查（提醒模式，不拦截）
-      if (isOverBudget()) {
-        const percentage = Math.round(getBudgetPercentage() * 100)
-        const budget = getAppConfig().get('tokenBudget')
-        const usage = getCurrentMonthUsage()
-        win?.webContents.send('chat:streamChunk', {
-          conversationId,
-          messageId: uuidv4(),
-          agentType: 'system',
-          chunk: `⚠️ 本月 Token 预算已用完，当前使用率：${percentage}%（已用 ${(usage.inputTokens + usage.outputTokens).toLocaleString()} / 预算 ${budget.monthlyLimit.toLocaleString()}）。如需继续，请在设置中调整预算或关闭预算控制。\n\n---\n\n`
-        })
-      }
-
       const messagesRepo = getMessagesRepo()
       const convRepo = getConversationsRepo()
 
-      // 估算用户消息 token 数并记录
+      // 估算用户消息 token 数（用于消息表 tokens 列统计）
       const userTokenEstimate = estimateTokens(content)
-      addTokenUsage(userTokenEstimate, 0)
 
       // 持久化用户消息
       const userMsgId = uuidv4()
@@ -209,9 +195,13 @@ export function registerChatIPC(mainWindow: BrowserWindow): void {
           if (msgData && (msgData.content || msgData.toolCalls.length > 0 || msgData.skillTriggers.length > 0)) {
             // strip <<<AGENT_MSG>>>...<<\/AGENT_MSG>>> 块，避免污染历史记录
             // （流式输出过程中对用户可见，但重载后不可见）
-            const cleanContent = msgData.content.replace(
-              /<<<AGENT_MSG>>>\s*[\s\S]*?<<<\/AGENT_MSG>>>/g,
-              ''
+            // 同时剥离 data-URL 图片 markdown（base64 可达数 MB），用占位替换，
+            // 避免历史/DB 被撑爆导致后续 LLM 调用越来越慢
+            const cleanContent = stripDataUrlImages(
+              msgData.content.replace(
+                /<<<AGENT_MSG>>>\s*[\s\S]*?<<<\/AGENT_MSG>>>/g,
+                ''
+              )
             ).trim()
             if (cleanContent || msgData.toolCalls.length > 0 || msgData.skillTriggers.length > 0) {
               const outputTokens = Math.ceil(cleanContent.length / 4)
@@ -226,7 +216,6 @@ export function registerChatIPC(mainWindow: BrowserWindow): void {
                 skill_triggers: msgData.skillTriggers.length > 0 ? JSON.stringify(msgData.skillTriggers) : null
               })
               // 记录输出 token 使用量
-              addTokenUsage(0, outputTokens)
               // DSH 兼容层：发射 assistant/message + turn/end 事件
               getEventBridge()?.onTurnEnd(conversationId, chunk.messageId)
             }
@@ -256,20 +245,6 @@ export function registerChatIPC(mainWindow: BrowserWindow): void {
 
   ipcMain.on('chat:abort', () => {
     currentAbortController?.abort()
-  })
-
-  // Token 使用量查询
-  ipcMain.handle('token:getUsage', async () => {
-    return getCurrentMonthUsage()
-  })
-
-  ipcMain.handle('token:getBudget', async () => {
-    const config = getAppConfig()
-    return {
-      ...config.get('tokenBudget'),
-      currentUsage: getCurrentMonthUsage(),
-      percentage: getBudgetPercentage()
-    }
   })
 
   // 文件附件解析

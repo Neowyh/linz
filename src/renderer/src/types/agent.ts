@@ -1,4 +1,4 @@
-export type BuiltinAgentType = 'orchestrator' | 'general' | 'aero' | 'structural' | 'propulsion' | 'avionics' | 'simulation' | 'documentation' | 'retriever'
+export type BuiltinAgentType = 'orchestrator' | 'general' | 'aero' | 'structural' | 'propulsion' | 'avionics' | 'simulation' | 'documentation' | 'retriever' | 'codereviewer'
 
 export type AgentType = BuiltinAgentType | string
 
@@ -21,7 +21,8 @@ export const AGENT_NAMES: Record<string, string> = {
   avionics: '航电 Agent',
   simulation: '仿真 Agent',
   documentation: '文档 Agent',
-  retriever: '检索 Agent'
+  retriever: '检索 Agent',
+  codereviewer: '代码审查 Agent'
 }
 
 export const AGENT_COLORS: Record<string, string> = {
@@ -33,7 +34,8 @@ export const AGENT_COLORS: Record<string, string> = {
   avionics: '#08979C',
   simulation: '#722ED1',
   documentation: '#389E0D',
-  retriever: '#1890FF'
+  retriever: '#1890FF',
+  codereviewer: '#13C2C2'
 }
 
 export const AGENT_ICONS: Record<string, string> = {
@@ -45,7 +47,8 @@ export const AGENT_ICONS: Record<string, string> = {
   avionics: 'assets/icons/avionics.svg',
   simulation: 'assets/icons/simulation.svg',
   documentation: 'assets/icons/documentation.svg',
-  retriever: 'assets/icons/retriever.svg'
+  retriever: 'assets/icons/retriever.svg',
+  codereviewer: 'assets/icons/codereviewer.svg'
 }
 
 export const AGENT_DELEGATES: Record<string, string[]> = {
@@ -57,5 +60,6 @@ export const AGENT_DELEGATES: Record<string, string[]> = {
   avionics: ['retriever'],
   simulation: ['aero', 'retriever'],
   documentation: ['retriever'],
-  retriever: []
+  retriever: [],
+  codereviewer: ['retriever']
 }

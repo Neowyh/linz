@@ -6,6 +6,7 @@ import { DEFAULT_LLM_CONFIG } from './deepseek'
 export { withRetry } from './retry'
 export type { RetryOptions } from './retry'
 export { compressContext, estimateTokens, estimateMessagesTokens } from './context-compressor'
+export { extractImageBlocks, stripDataUrlImages } from './image-protocol'
 
 export function getLLMConfig(): LLMConfig {
   const config = getAppConfig()

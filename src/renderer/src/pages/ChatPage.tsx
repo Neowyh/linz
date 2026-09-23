@@ -30,7 +30,7 @@ export default function ChatPage(): JSX.Element {
     if (urlConvId && urlConvId !== conversationId) {
       loadConversation(urlConvId)
     } else if (!urlConvId) {
-      useChatStore.getState().setConversation(null)
+      // 进裸 /chat：若当前对话仍在流式，clearMessages 会先快照进缓存让其后台续跑，再清空活跃视图
       useChatStore.getState().clearMessages()
     }
   }, [urlConvId])

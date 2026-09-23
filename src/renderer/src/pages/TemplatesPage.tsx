@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom'
 import { useChatStore } from '../stores/chatStore'
 import { AGENT_ICONS } from '../types/agent'
 import AgentIcon from '../components/AgentIcon'
+import { parseStringArray } from '../utils/text'
 
 interface TemplateData {
   id: string
@@ -117,9 +118,7 @@ export default function TemplatesPage(): JSX.Element {
     }
   }
 
-  const parseAgents = (agentsStr: string): string[] => {
-    try { return JSON.parse(agentsStr) } catch { return [] }
-  }
+  const parseAgents = (agentsStr: string): string[] => parseStringArray(agentsStr)
 
   const parseInputParams = (paramsStr: string): any[] => {
     try { return JSON.parse(paramsStr || '[]') } catch { return [] }

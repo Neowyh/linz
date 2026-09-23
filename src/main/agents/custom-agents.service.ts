@@ -6,7 +6,13 @@ import type { AgentOverrideConfig } from './base.agent'
 import { reregisterBuiltinAgents } from './reregister'
 
 // 内置 Agent id 集合（导出/导入校验、委派目标有效性判断复用）
-export const BUILTIN_AGENT_IDS = ['orchestrator', 'general', 'aero', 'structural', 'propulsion', 'avionics', 'simulation', 'documentation', 'retriever']
+export const BUILTIN_AGENT_IDS = ['orchestrator', 'general', 'aero', 'structural', 'propulsion', 'avionics', 'simulation', 'documentation', 'retriever', 'codereviewer']
+
+// 引擎枚举：非 'pi' 一律归一为 'deepseek'（与 createCustomAgent 的默认语义一致），
+// 防止脏数据/旧导入把任意字符串写进 engine 列、运行时静默落到 DeepSeek
+function normalizeEngine(v: unknown): 'deepseek' | 'pi' {
+  return v === 'pi' ? 'pi' : 'deepseek'
+}
 
 // 将 IPC 更新值转换为 sql.js 支持的绑定值；undefined/null 表示 SQL NULL。
 function normalizeBindValue(value: any): any {
@@ -67,7 +73,7 @@ function rowToCustomAgent(row: any[]): CustomAgentRow {
     subtask_prefix: row[8], model_name: row[9], is_custom: row[10],
     usage_count: row[11], created_at: row[12], updated_at: row[13],
     delegates_to: row[14] || '[]',
-    engine: row[15] || 'deepseek',
+    engine: normalizeEngine(row[15]),
     kb_tags: row[16] || '[]'
   }
 }
@@ -94,6 +100,34 @@ export function registerCustomAgentsFromDB(): void {
     console.log(`[CustomAgents] Registered ${registered} custom agents`)
   } catch (err) {
     console.warn('[CustomAgents] Failed to register custom agents:', err)
+  }
+}
+
+// 注册“无专门 Agent 类的内置 agent”（如 codereviewer）：配置全在 DB seed，
+// 用 DynamicAgent 包装。有别于 registerCustomAgentsFromDB（只读 is_custom=1）。
+// 跳过已在 registry 的（前 9 个有专门类的内置 agent 在 registerAllAgents 硬编码注册）。
+export function registerBuiltinDynamicAgents(): void {
+  try {
+    const db = getDatabase()
+    const results = db.exec(`SELECT ${AGENT_COLUMNS} FROM custom_agents WHERE is_custom = 0`)
+    if (!results[0]) return
+    let registered = 0
+    for (const row of results[0].values) {
+      try {
+        const agentRow = rowToCustomAgent(row)
+        if (agentRegistry.get(agentRow.id)) continue // 已注册（有专门类的内置 agent）
+        const agent = new DynamicAgent(agentRow)
+        agentRegistry.register(agent)
+        registered++
+      } catch (err) {
+        console.warn('[CustomAgents] Skipping malformed builtin agent row:', row[0], err)
+        continue
+      }
+    }
+    refreshCustomKeywordCache()
+    if (registered > 0) console.log(`[CustomAgents] Registered ${registered} builtin dynamic agents`)
+  } catch (err) {
+    console.warn('[CustomAgents] Failed to register builtin dynamic agents:', err)
   }
 }
 
@@ -152,7 +186,7 @@ export function createCustomAgent(params: {
   const id = `agent-custom-${uuidv4()}`
   const toolsJson = JSON.stringify(params.tools)
   const keywordsJson = JSON.stringify(params.keywords)
-  const engine = params.engine || 'deepseek'
+  const engine = normalizeEngine(params.engine)
   const kbTagsJson = JSON.stringify(Array.isArray(params.kbTags) ? params.kbTags : [])
 
   db.run(
@@ -184,7 +218,7 @@ export function updateCustomAgent(id: string, updates: Record<string, any>): { s
     const dbKey = key === 'systemPrompt' ? 'system_prompt' : key === 'subtaskPrefix' ? 'subtask_prefix' : key === 'modelName' ? 'model_name' : key === 'kbTags' ? 'kb_tags' : key
     if (!allowedFields.includes(dbKey)) continue
     setClauses.push(`${dbKey} = ?`)
-    values.push(normalizeBindValue(value))
+    values.push(normalizeBindValue(dbKey === 'engine' ? normalizeEngine(value) : value))
   }
 
   if (setClauses.length === 0) return { success: true }
@@ -302,8 +336,7 @@ export function getBuiltinAgent(id: string): any | null {
 }
 
 export function updateBuiltinAgent(id: string, updates: Record<string, any>): { success: boolean; error?: string } {
-  const validBuiltinIds = ['orchestrator','general','aero','structural','propulsion','avionics','simulation','documentation','retriever']
-  if (!validBuiltinIds.includes(id)) {
+  if (!BUILTIN_AGENT_IDS.includes(id)) {
     return { success: false, error: '不是内置 Agent' }
   }
 
@@ -321,7 +354,7 @@ export function updateBuiltinAgent(id: string, updates: Record<string, any>): { 
     const dbKey = key === 'kbTags' ? 'kb_tags' : key
     if (!allowedFields.includes(dbKey)) continue
     setClauses.push(`${dbKey} = ?`)
-    values.push(normalizeBindValue(value))
+    values.push(normalizeBindValue(dbKey === 'engine' ? normalizeEngine(value) : value))
   }
 
   if (setClauses.length === 0) return { success: true }
@@ -344,8 +377,7 @@ export function updateBuiltinAgent(id: string, updates: Record<string, any>): { 
 }
 
 export function resetBuiltinAgent(id: string, seedFn: (db: any, id: string) => void): { success: boolean; error?: string } {
-  const validBuiltinIds = ['orchestrator','general','aero','structural','propulsion','avionics','simulation','documentation','retriever']
-  if (!validBuiltinIds.includes(id)) {
+  if (!BUILTIN_AGENT_IDS.includes(id)) {
     return { success: false, error: '不是内置 Agent' }
   }
 

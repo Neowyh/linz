@@ -13,3 +13,7 @@ __pycache__/
 # Large binary resources — prepared by scripts/prepare-python.cjs and prepare-skill-deps.cjs
 resources/bin/win32/python/Lib/site-packages/
 resources/bin/win32/poppler/
+
+# Generated version manifests — produced by scripts/gen-manifest.cjs
+resources/installed-manifest.json
+manifest.json

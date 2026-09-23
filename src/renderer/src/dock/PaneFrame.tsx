@@ -98,9 +98,10 @@ function PaneFrame({ pane }: PaneFrameProps): JSX.Element {
   if (pane.anchor) {
     return (
       <div
-        className={`h-full w-full min-w-0 bg-white overflow-hidden relative ${
+        className={`h-full w-full min-w-0 overflow-hidden relative ${
           dropSrc ? 'ring-2 ring-primary/40' : ''
         }`}
+        style={{ background: 'var(--pane-bg, #FFFFFF)' }}
         onDragOver={onDragOver}
         onDragLeave={() => setDropSrc(null)}
         onDrop={onDrop}
@@ -114,9 +115,10 @@ function PaneFrame({ pane }: PaneFrameProps): JSX.Element {
 
   return (
     <div
-      className={`h-full flex flex-col bg-white border border-line-light overflow-hidden ${
+      className={`h-full flex flex-col border border-line-light overflow-hidden ${
         dropSrc ? 'ring-2 ring-primary/40' : ''
       }`}
+      style={{ background: 'var(--pane-bg, #FFFFFF)' }}
       onDragOver={onDragOver}
       onDragLeave={() => setDropSrc(null)}
       onDrop={onDrop}

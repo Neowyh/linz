@@ -7,7 +7,9 @@ import { AGENT_NAMES } from '../types/agent'
 import type { BuiltinAgentType } from '../types/agent'
 import { isMcpServerMarker, parseMcpServerMarker, buildMcpServerMarker } from '../types/customAgent'
 import { AgentIconPicker, AGENT_ICON_OPTIONS } from '../components/AgentIconPicker'
+import AgentIcon from '../components/AgentIcon'
 import type { ToolInfo } from '../types/customAgent'
+import { parseStringArray } from '../utils/text'
 
 const { TextArea } = Input
 const { Text } = Typography
@@ -69,6 +71,9 @@ export default function AgentEditorPage(): JSX.Element {
   const location = useLocation()
   const searchParams = new URLSearchParams(location.search)
   const isBuiltin = searchParams.get('builtin') === 'true'
+  // 协同调度器在 OrchestratorAgent.run 里硬编码走 DeepSeek/LangChain、不经 streamLLM，
+  // engine 字段会被静默忽略；编辑页对此固定禁用选择器，避免用户改了以为生效。
+  const isOrchestrator = isBuiltin && id === 'orchestrator'
 
   const {
     agents, builtinAgents, availableTools,
@@ -150,13 +155,13 @@ export default function AgentEditorPage(): JSX.Element {
     setColor(agent.color || PRESET_COLORS[0])
     setIcon(agent.icon || 'assets/icons/orchestrator.svg')
     setSystemPrompt(agent.system_prompt || '')
-    try { setTools(JSON.parse(agent.tools || '[]')) } catch { setTools([]) }
-    try { setKeywords(JSON.parse(agent.keywords || '[]')) } catch { setKeywords([]) }
-    try { setDelegatesTo(JSON.parse(agent.delegates_to || '[]')) } catch { setDelegatesTo([]) }
+    setTools(parseStringArray(agent.tools))
+    setKeywords(parseStringArray(agent.keywords))
+    setDelegatesTo(parseStringArray(agent.delegates_to))
     setSubtaskPrefix(agent.subtask_prefix || '')
     setModelName(agent.model_name || 'deepseek-chat')
     setEngine(agent.engine === 'pi' ? 'pi' : 'deepseek')
-    try { setKbTags(JSON.parse(agent.kb_tags || '[]')) } catch { setKbTags([]) }
+    setKbTags(parseStringArray(agent.kb_tags))
     setLoading(false)
   }
 
@@ -377,7 +382,7 @@ export default function AgentEditorPage(): JSX.Element {
             </Text>
             <AgentIconPicker value={icon} onChange={setIcon} options={AGENT_ICON_OPTIONS} />
             <div className="flex items-center gap-2 mt-3">
-              <span className="text-2xl w-8 text-center">{icon}</span>
+              <AgentIcon icon={icon} className="text-2xl w-8 h-8 flex items-center justify-center object-contain" />
               <Input
                 value={icon}
                 onChange={(e) => setIcon(e.target.value)}
@@ -506,18 +511,23 @@ export default function AgentEditorPage(): JSX.Element {
           <div>
             <label className="text-sm font-medium text-gray-900 mb-1 block">LLM 引擎</label>
             <Select
-              value={engine}
+              value={isOrchestrator ? 'deepseek' : engine}
               onChange={(v: 'deepseek' | 'pi') => setEngine(v)}
+              disabled={isOrchestrator}
               style={{ width: '100%' }}
             >
               <Select.Option value="deepseek">DeepSeek（LangChain 直连）</Select.Option>
               <Select.Option value="pi">Pi SDK（OpenAI-compatible）</Select.Option>
             </Select>
-            {engine === 'pi' && (
+            {isOrchestrator ? (
+              <div className="text-xs text-amber-600 mt-1">
+                协同调度器固定使用 DeepSeek（Phase A 共存模式），引擎不可切换。
+              </div>
+            ) : engine === 'pi' ? (
               <div className="text-xs text-gray-500 mt-1">
                 Pi 引擎默认启用原生工具（read/bash/grep/find/ls），所选临智工具（含 MCP / 委派）将作为 customTools 一并注入。
               </div>
-            )}
+            ) : null}
           </div>
 
           {/* Model Name */}

@@ -59,6 +59,7 @@ let attachmentIdCounter = 0
 export default function ChatInput({ onSend, onAbort, isStreaming, disabled, onExport, exportMenuItems }: ChatInputProps): JSX.Element {
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState<AttachmentState[]>([])
+  const [isDragOver, setDragOver] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   // 从 chatStore 拉取待填入的 prompt（模板广场等场景预填，不自动发送）
@@ -303,59 +304,64 @@ export default function ChatInput({ onSend, onAbort, isStreaming, disabled, onEx
     }
   }
 
+  // 把 File 列表转成附件并逐个解析（点击选文件与拖拽共用此逻辑）
+  const addFilesFromList = async (files: File[]): Promise<void> => {
+    if (files.length === 0) return
+
+    const newAttachments: AttachmentState[] = []
+    for (const file of files) {
+      const id = `att-${++attachmentIdCounter}`
+      // In Electron, File objects have a .path property pointing to the real file path
+      const filePath = (file as any).path || file.name
+      newAttachments.push({
+        id,
+        fileName: file.name,
+        filePath,
+        status: 'parsing'
+      })
+    }
+
+    setAttachments((prev) => [...prev, ...newAttachments])
+
+    for (const att of newAttachments) {
+      try {
+        const result = await window.aeromind.chat.uploadAttachment(att.filePath)
+        setAttachments((prev) =>
+          prev.map((a) =>
+            a.id === att.id
+              ? { ...a, status: result.error ? 'error' : 'done', parsed: result }
+              : a
+          )
+        )
+      } catch (err: any) {
+        setAttachments((prev) =>
+          prev.map((a) =>
+            a.id === att.id
+              ? {
+                  ...a,
+                  status: 'error',
+                  parsed: {
+                    fileName: att.fileName,
+                    fileType: 'unknown',
+                    content: '',
+                    error: err.message || '解析失败'
+                  }
+                }
+              : a
+          )
+        )
+      }
+    }
+  }
+
   const handleFileSelect = async (): Promise<void> => {
     const fileInput = document.createElement('input')
     fileInput.type = 'file'
     fileInput.multiple = true
-    fileInput.accept = '.pdf,.docx,.doc,.xlsx,.csv,.txt,.md,.dat,.json'
+    fileInput.accept = '.pdf,.docx,.doc,.xlsx,.csv,.txt,.md,.dat,.json,.py,.js,.jsx,.ts,.tsx,.mjs,.cjs,.java,.c,.cpp,.cc,.cxx,.h,.hpp,.go,.rs,.cs,.vue,.php,.rb,.swift,.kt,.dart,.r,.lua,.sh,.bash,.sql,.scala,.clj,.hs,.ml,.fs,.pl,.yml,.yaml,.toml,.ini,.xml,.html,.htm,.css,.scss'
     fileInput.onchange = async () => {
       if (!fileInput.files || fileInput.files.length === 0) return
-
-      const newAttachments: AttachmentState[] = []
-
-      for (const file of Array.from(fileInput.files)) {
-        const id = `att-${++attachmentIdCounter}`
-        // In Electron, File objects have a .path property pointing to the real file path
-        const filePath = (file as any).path || file.name
-        newAttachments.push({
-          id,
-          fileName: file.name,
-          filePath,
-          status: 'parsing'
-        })
-      }
-
-      setAttachments((prev) => [...prev, ...newAttachments])
-
-      for (const att of newAttachments) {
-        try {
-          const result = await window.aeromind.chat.uploadAttachment(att.filePath)
-          setAttachments((prev) =>
-            prev.map((a) =>
-              a.id === att.id
-                ? { ...a, status: result.error ? 'error' : 'done', parsed: result }
-                : a
-            )
-          )
-        } catch (err: any) {
-          setAttachments((prev) =>
-            prev.map((a) =>
-              a.id === att.id
-                ? {
-                    ...a,
-                    status: 'error',
-                    parsed: {
-                      fileName: att.fileName,
-                      fileType: 'unknown',
-                      content: '',
-                      error: err.message || '解析失败'
-                    }
-                  }
-                : a
-            )
-          )
-        }
-      }
+      await addFilesFromList(Array.from(fileInput.files))
     }
     fileInput.click()
   }
@@ -449,7 +455,25 @@ export default function ChatInput({ onSend, onAbort, isStreaming, disabled, onEx
           </div>
         )}
 
-        <div className="relative flex items-end gap-2 rounded-card border border-line bg-white p-3 shadow-card focus-within:border-primary focus-within:shadow-focus-ring transition-all">
+        <div
+          className={`relative flex items-end gap-2 rounded-card border p-3 shadow-card transition-all ${
+            isDragOver
+              ? 'border-primary border-dashed bg-blue-50'
+              : 'border-line bg-white focus-within:border-primary focus-within:shadow-focus-ring'
+          }`}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+          onDragLeave={(e) => {
+            // 仅在真正离开容器时才取消高亮（避免在子元素间移动时闪烁）
+            if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false)
+          }}
+          onDrop={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            setDragOver(false)
+            const files = e.dataTransfer?.files
+            if (files && files.length > 0) void addFilesFromList(Array.from(files))
+          }}
+        >
           {/* @ 自动补全下拉列表 */}
           {mentionOpen && (
             <div className="absolute bottom-full left-0 right-0 mb-2 bg-white rounded-card border border-line shadow-popover max-h-64 overflow-y-auto z-50">

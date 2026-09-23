@@ -3,6 +3,7 @@ import { message as antdMessage, Collapse } from 'antd'
 import { memo, useState } from 'react'
 import type { ChatMessage as ChatMessageType, ToolCallEntry, SkillTriggerInfo } from '../../types/chat'
 import { resolveAgentDisplaySnapshot } from '../../utils/agentDisplay'
+import { asText } from '../../utils/text'
 import { extractImagesToFiles, convertContentSvgToPng } from '../../utils/exportImages'
 import { useApprovalStore } from '../../stores/approvalStore'
 import MarkdownRenderer from '../Markdown/MarkdownRenderer'
@@ -86,9 +87,14 @@ function stripAttachmentContent(raw: string): { displayText: string; attachments
 function ToolCallCard({ call }: { call: ToolCallEntry }): JSX.Element {
   const [expanded, setExpanded] = useState(false)
   const running = call.isComplete === false
-  const hasOutput = call.output && call.output.length > 0
-  const inputShort = call.input.length > 80 ? call.input.slice(0, 80) + '...' : call.input
-  const outputShort = hasOutput && call.output.length > 80 ? call.output.slice(0, 80) + '...' : call.output
+  // asText 兜底：历史/脏数据里 input/output/tool 可能是对象，直接 {value} 渲染会触发
+  // React "Objects are not valid as a React child" (#31) 白屏。这里统一规整为字符串。
+  const toolStr = asText(call.tool)
+  const inputStr = asText(call.input)
+  const outputStr = asText(call.output)
+  const hasOutput = outputStr.length > 0
+  const inputShort = inputStr.length > 80 ? inputStr.slice(0, 80) + '...' : inputStr
+  const outputShort = hasOutput && outputStr.length > 80 ? outputStr.slice(0, 80) + '...' : outputStr
 
   return (
     <div className="border border-gray-200 rounded-md bg-gray-50/50 text-xs">
@@ -97,7 +103,7 @@ function ToolCallCard({ call }: { call: ToolCallEntry }): JSX.Element {
         className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-gray-100 transition-colors"
       >
         <ToolOutlined style={{ fontSize: 12, color: '#1E6FCC' }} />
-        <span className="font-mono font-medium text-primary">{call.tool}</span>
+        <span className="font-mono font-medium text-primary">{toolStr}</span>
         {running ? (
           <span className="flex items-center gap-1 text-amber-600">
             <LoadingOutlined style={{ fontSize: 11 }} />
@@ -111,13 +117,13 @@ function ToolCallCard({ call }: { call: ToolCallEntry }): JSX.Element {
         )}
         <span className="ml-auto text-gray-400">{expanded ? '收起' : '展开'}</span>
       </button>
-      {(call.input || hasOutput) && (
+      {(inputStr || hasOutput) && (
         <div className={`px-3 pb-2 ${expanded ? 'block' : 'hidden'}`}>
-          {call.input && (
+          {inputStr && (
             <div className="mt-1">
               <div className="text-[10px] text-gray-500 mb-0.5">输入</div>
               <pre className="font-mono text-[11px] bg-white border border-gray-200 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all max-h-40">
-                {call.input}
+                {inputStr}
               </pre>
             </div>
           )}
@@ -125,7 +131,7 @@ function ToolCallCard({ call }: { call: ToolCallEntry }): JSX.Element {
             <div className="mt-2">
               <div className="text-[10px] text-gray-500 mb-0.5">输出</div>
               <pre className="font-mono text-[11px] bg-white border border-gray-200 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all max-h-60">
-                {call.output}
+                {outputStr}
               </pre>
             </div>
           )}
@@ -238,7 +244,8 @@ const ChatMessage = memo(function ChatMessage({ message }: ChatMessageProps): JS
     }
   }
 
-  const hasThinking = !isUser && message.thinking && message.thinking.trim().length > 0
+  const thinkingStr = !isUser ? asText(message.thinking) : ''
+  const hasThinking = thinkingStr.trim().length > 0
   const hasToolCalls = !isUser && message.toolCalls && message.toolCalls.length > 0
   const hasSkillTriggers = !isUser && message.skillTriggers && message.skillTriggers.length > 0
   const pendingApprovals = useApprovalStore((s) =>
@@ -311,7 +318,7 @@ const ChatMessage = memo(function ChatMessage({ message }: ChatMessageProps): JS
                     ),
                     children: (
                       <pre className="font-mono text-[11px] text-gray-600 whitespace-pre-wrap bg-purple-50/50 border border-purple-100 rounded p-2 max-h-60 overflow-y-auto">
-                        {message.thinking}
+                        {thinkingStr}
                       </pre>
                     )
                   }]}

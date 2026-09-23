@@ -2,7 +2,7 @@ import type { BrowserWindow } from 'electron'
 import { v4 as uuidv4 } from 'uuid'
 import { getAgentEngine } from '../agents'
 import { getMessagesRepo, getConversationsRepo } from '../database'
-import { getFileWorkspacePath, addTokenUsage } from '../store/app-config'
+import { getFileWorkspacePath } from '../store/app-config'
 import { estimateTokens } from '../llm'
 import {
   StepMarkerStream,
@@ -44,7 +44,6 @@ export async function runStream(
   // ── Persist user message ──────────────────────────────────
   const userMsgId = uuidv4()
   const userTokens = estimateTokens(text)
-  addTokenUsage(userTokens, 0)
   messagesRepo.insert({
     id: userMsgId,
     conversation_id: conversationId,
@@ -243,7 +242,6 @@ export async function runStream(
               tool_calls: md.toolCalls.length > 0 ? JSON.stringify(md.toolCalls) : null,
               skill_triggers: md.skillTriggers.length > 0 ? JSON.stringify(md.skillTriggers) : null
             })
-            addTokenUsage(0, outputTokens)
           }
 
           // Emit assistant/message + turn/end DSH events

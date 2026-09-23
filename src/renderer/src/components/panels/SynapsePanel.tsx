@@ -29,13 +29,37 @@ export default function SynapsePanel({ panelType: _panelType }: SynapsePanelProp
   const webviewRef = useRef<HTMLWebViewElement>(null)
 
   useEffect(() => {
-    window.aeromind.dsh.getConfig().then((config) => {
-      useDshStore.setState({ port: config.port })
-      setPreloadPath(config.preloadPath)
-      setLoading(false)
-    }).catch(() => {
-      setLoading(false)
-    })
+    let cancelled = false
+    let retries = 0
+    const maxRetries = 6
+    const retryDelayMs = 500
+
+    // initDshShim() 在主进程是异步启动的，应用刚启动时 port 可能为 0。
+    // 用重试机制等待 DSH 兼容层就绪，避免面板永久卡在"未初始化"空状态。
+    const fetchConfig = async (): Promise<void> => {
+      try {
+        const config = await window.aeromind.dsh.getConfig()
+        if (cancelled) return
+        if (!config.port && retries < maxRetries) {
+          retries++
+          setTimeout(fetchConfig, retryDelayMs)
+          return
+        }
+        useDshStore.setState({ port: config.port })
+        setPreloadPath(config.preloadPath)
+        setLoading(false)
+      } catch {
+        if (cancelled) return
+        if (retries < maxRetries) {
+          retries++
+          setTimeout(fetchConfig, retryDelayMs)
+          return
+        }
+        setLoading(false)
+      }
+    }
+
+    fetchConfig()
 
     // When a card is clicked in the map, switch to that conversation
     // in the main chat sidebar via react-router navigation.
@@ -44,6 +68,7 @@ export default function SynapsePanel({ panelType: _panelType }: SynapsePanelProp
     })
 
     return () => {
+      cancelled = true
       unsubscribe()
     }
   }, [navigate])

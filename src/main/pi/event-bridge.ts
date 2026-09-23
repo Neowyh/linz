@@ -18,7 +18,7 @@ export function subscribeToSession(
   signal: AbortSignal
 ): () => void {
   // 缓存 tool_execution_start 的参数，等对应的 end 事件到达时合并成完整 ToolCallData
-  const pendingToolCalls = new Map<string, { tool: string; input: string }>()
+  const pendingToolCalls = new Map<string, { tool: string; input: string; output: string }>()
 
   const unsub = session.subscribe((event: any) => {
     switch (event.type) {
@@ -46,7 +46,7 @@ export function subscribeToSession(
         } else {
           try { inputStr = JSON.stringify(args) } catch { inputStr = String(args) }
         }
-        pendingToolCalls.set(toolCallId, { tool: toolName, input: inputStr })
+        pendingToolCalls.set(toolCallId, { tool: toolName, input: inputStr, output: '' })
         // 推送占位 toolCall（output 为空，isComplete=false），UI 显示"执行中"
         onChunk({
           toolCall: {
@@ -60,7 +60,30 @@ export function subscribeToSession(
         break
       }
       case 'tool_execution_update': {
-        // 流式工具输出，Phase A 暂不展示，等 end 事件一次性输出
+        // 流式工具输出增量：累积到对应 pending 条目，推送 isComplete=false 更新
+        const toolCallId: string = event.toolCallId
+        const pending = pendingToolCalls.get(toolCallId)
+        if (!pending) break
+        const upd = event.update ?? event.delta ?? event.output
+        let delta: string
+        if (typeof upd === 'string') {
+          delta = upd
+        } else if (upd && typeof upd === 'object' && typeof (upd as any).content === 'string') {
+          delta = (upd as any).content
+        } else {
+          break
+        }
+        if (!delta) break
+        pending.output += delta
+        onChunk({
+          toolCall: {
+            toolCallId,
+            tool: pending.tool,
+            input: pending.input,
+            output: pending.output,
+            isComplete: false
+          }
+        })
         break
       }
       case 'tool_execution_end': {
@@ -81,6 +104,8 @@ export function subscribeToSession(
         } else {
           try { outputStr = JSON.stringify(result) } catch { outputStr = String(result) }
         }
+        // 工具若只推流式增量无 result，用累积的流式输出兜底
+        if (!outputStr && pending?.output) outputStr = pending.output
         if (event.isError) {
           outputStr = `[工具错误] ${outputStr}`
         }

@@ -13,12 +13,19 @@ interface MessageLike {
 }
 
 // Rough token estimation: Chinese chars x2 + English words x1.3
+// 注意：base64 data URL 等无空格超长串会被 split(/\s+/) 当成单个"词"，
+// 导致一张 4MB 图片（约百万 token）只算 ~1.3 token，压缩器永远不触发。
+// 对超过 100 字符的无空格串按 ~4 字符/token 估算，让压缩器对图片数据生效。
 export function estimateTokens(text: string): number {
   if (!text) return 0
   const chineseChars = (text.match(/[一-鿿]/g) || []).length
   const nonChinese = text.replace(/[一-鿿]/g, ' ')
-  const englishWords = nonChinese.split(/\s+/).filter((w) => w.length > 0).length
-  return Math.ceil(chineseChars * 2 + englishWords * 1.3)
+  const words = nonChinese.split(/\s+/).filter((w) => w.length > 0)
+  let tokens = chineseChars * 2
+  for (const w of words) {
+    tokens += w.length > 100 ? Math.ceil(w.length / 4) : 1.3
+  }
+  return Math.ceil(tokens)
 }
 
 export function estimateMessagesTokens(messages: MessageLike[]): number {
@@ -34,7 +41,7 @@ function toBaseMessages(messages: MessageLike[]): BaseMessage[] {
 }
 
 async function generateSummary(messages: MessageLike[]): Promise<string> {
-  const llm = createChatModel({ modelName: 'deepseek-chat' })
+  const llm = createChatModel()
   // 体现 agent_type，让摘要能区分不同 agent 的发言
   const conversationText = messages
     .map((msg) => {

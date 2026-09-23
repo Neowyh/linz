@@ -12,6 +12,7 @@ import ToolsOverviewTab from '../components/ToolsOverviewTab'
 import AgentSkillsTab from '../components/AgentSkillsTab'
 import AgentIcon from '../components/AgentIcon'
 import ImportAgentsModal, { type AgentImportCandidate } from '../components/ImportAgentsModal'
+import { parseStringArray as parseJsonArray } from '../utils/text'
 
 const BUILTIN_DESCRIPTIONS: Record<BuiltinAgentType, string> = {
   orchestrator: '分析用户飞行器设计任务，调度专业 Agent 协同工作',
@@ -33,10 +34,6 @@ const BUILTIN_AGENTS = (Object.keys(AGENT_NAMES) as BuiltinAgentType[]).map((typ
   description: BUILTIN_DESCRIPTIONS[type],
   isBuiltin: true
 }))
-
-function parseJsonArray(str: string): string[] {
-  try { return JSON.parse(str) } catch { return [] }
-}
 
 function AgentsListTab(): JSX.Element {
   const navigate = useNavigate()

@@ -18,13 +18,37 @@ import {
 } from '../agents/skill-import.service'
 import type { AgentSkill } from '../database'
 
+// 解析存成 JSON 字符串的数组字段为 string[]。历史/导入数据里个别元素
+// 可能存成了对象（如 { name: "aero" }），原样透传给前端 .map 渲染会触发
+// React "Objects are not valid as a React child" 致命错误并白屏。
+// 这里强制把每个元素规整为字符串（对象取 name/id/label/value），空元素丢弃。
 function parseJsonArray(str: string): string[] {
+  let arr: unknown
   try {
-    const arr = JSON.parse(str || '[]')
-    return Array.isArray(arr) ? arr : []
+    arr = JSON.parse(str || '[]')
   } catch {
     return []
   }
+  if (!Array.isArray(arr)) return []
+  const out: string[] = []
+  for (const v of arr) {
+    let s: string
+    if (typeof v === 'string') s = v
+    else if (typeof v === 'number' || typeof v === 'boolean') s = String(v)
+    else if (v && typeof v === 'object') {
+      const o = v as Record<string, unknown>
+      s = typeof o.name === 'string' ? o.name
+        : typeof o.id === 'string' ? o.id
+        : typeof o.label === 'string' ? o.label
+        : typeof o.value === 'string' ? o.value
+        : (() => { try { return JSON.stringify(o) } catch { return '[object]' } })()
+    } else {
+      s = v == null ? '' : String(v)
+    }
+    s = s.trim()
+    if (s.length > 0) out.push(s)
+  }
+  return out
 }
 
 // 把 DB 行（JSON 字符串字段）转换为渲染端期望的数组形式

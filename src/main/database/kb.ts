@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3'
+import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
 import { v4 as uuidv4 } from 'uuid'
@@ -238,6 +239,22 @@ function createSchema(db: Database.Database): void {
       content_hash TEXT NOT NULL,
       enriched_at TEXT DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS kb_wiki_pages (
+      id TEXT PRIMARY KEY,
+      slug TEXT UNIQUE NOT NULL,
+      title TEXT NOT NULL,
+      page_type TEXT NOT NULL DEFAULT 'entity',
+      content TEXT,
+      summary TEXT,
+      in_links TEXT DEFAULT '[]',
+      out_links TEXT DEFAULT '[]',
+      source_refs TEXT DEFAULT '[]',
+      chunk_refs TEXT DEFAULT '[]',
+      content_hash TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_kb_wiki_pages_type ON kb_wiki_pages(page_type);
   `)
 }
 
@@ -403,11 +420,33 @@ export function listCategories(): string[] {
 }
 
 // 汇总所有文档的标签（去重，带缓存）
+// 历史/导入数据里个别 tag 可能存成了对象（如 { name: "气动" }），json_each 会把它
+// 原样吐成 '{"name":"气动"}' 文本，既难看又会让标签过滤失效。这里规整为字符串。
 export function listAllTags(): string[] {
   if (tagsCache) return tagsCache
   const rows = getKbDatabase().prepare(`SELECT DISTINCT je.value t FROM kb_documents, json_each(kb_documents.tags) je ORDER BY t`).all() as Array<{ t: string }>
-  tagsCache = rows.map((r) => r.t)
+  tagsCache = rows.map((r) => normalizeTagValue(r.t)).filter((s) => s.length > 0)
   return tagsCache
+}
+
+// json_each 对对象元素吐出的是 JSON 文本，解出其中的 name/id/label/value；
+// 普通字符串原样返回。
+function normalizeTagValue(raw: string): string {
+  const s = (raw || '').trim()
+  if (!s.startsWith('{') && !s.startsWith('[')) return s
+  try {
+    const v = JSON.parse(s)
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      const o = v as Record<string, unknown>
+      const inner = typeof o.name === 'string' ? o.name
+        : typeof o.id === 'string' ? o.id
+        : typeof o.label === 'string' ? o.label
+        : typeof o.value === 'string' ? o.value
+        : ''
+      return inner.trim()
+    }
+  } catch { /* 不是合法 JSON，按原样返回 */ }
+  return s
 }
 
 export function getFileName(documentId: string): string {
@@ -708,4 +747,202 @@ export function clearGraphEnrichment(docIds?: string[]): void {
     })
     tx()
   }
+}
+
+// ============ GraphRAG：实体搜索与关系查询 ============
+
+export interface EntitySearchResult {
+  entityId: string
+  entityName: string
+  entityType: string
+  documentId: string
+  fileName: string
+}
+
+export interface EntityRelationResult {
+  id: string
+  sourceEntity: string
+  sourceName: string
+  targetEntity: string
+  targetName: string
+  relationLabel: string
+}
+
+// 按名称搜索图谱实体：先精确匹配（去空格小写），再 LIKE 模糊匹配
+export function searchEntitiesByName(names: string[]): EntitySearchResult[] {
+  if (names.length === 0) return []
+  const db = getKbDatabase()
+  const seen = new Set<string>()
+  const results: EntitySearchResult[] = []
+
+  const queryJoin = `
+    SELECT e.id AS entityId, e.name AS entityName, e.entity_type AS entityType,
+           e.document_id AS documentId, d.file_name AS fileName
+    FROM kb_graph_entities e
+    JOIN kb_documents d ON d.id = e.document_id
+  `
+
+  // Pass 1: 精确匹配（normalize 后 = ）
+  for (const raw of names) {
+    const normalized = raw.trim().replace(/\s+/g, '').toLowerCase()
+    if (!normalized) continue
+    const rows = db.prepare(
+      `${queryJoin} WHERE REPLACE(REPLACE(LOWER(e.name), ' ', ''), '\n', '') = ?`
+    ).all(normalized) as EntitySearchResult[]
+    for (const r of rows) {
+      if (!seen.has(r.entityId)) {
+        seen.add(r.entityId)
+        results.push(r)
+      }
+    }
+  }
+
+  // Pass 2: LIKE 模糊匹配（补充精确未命中的）
+  for (const raw of names) {
+    const trimmed = raw.trim().replace(/\s+/g, '')
+    if (!trimmed || trimmed.length < 2) continue
+    const rows = db.prepare(
+      `${queryJoin} WHERE e.name LIKE ? AND e.id NOT IN (${Array.from(seen).map(() => '?').join(',') || "''"})`
+    ).all(`%${trimmed}%`, ...Array.from(seen)) as EntitySearchResult[]
+    for (const r of rows) {
+      if (!seen.has(r.entityId)) {
+        seen.add(r.entityId)
+        results.push(r)
+      }
+    }
+  }
+
+  return results
+}
+
+// 获取实体关联的关系（作为 source 或 target）
+export function getEntityRelations(entityId: string): EntityRelationResult[] {
+  const db = getKbDatabase()
+  const rows = db.prepare(`
+    SELECT r.id, r.source_entity, r.target_entity, r.relation_label,
+           se.name AS sourceName, te.name AS targetName
+    FROM kb_graph_relations r
+    LEFT JOIN kb_graph_entities se ON se.id = r.source_entity
+    LEFT JOIN kb_graph_entities te ON te.id = r.target_entity
+    WHERE r.source_entity = ? OR r.target_entity = ?
+  `).all(entityId, entityId) as EntityRelationResult[]
+  return rows
+}
+
+// 获取实体来源文档的文本块（GraphRAG 检索增强用）
+export function getChunksByEntity(entityId: string, limit = 5): Array<{ content: string; document_id: string; file_name: string }> {
+  const db = getKbDatabase()
+  const entity = db.prepare('SELECT document_id FROM kb_graph_entities WHERE id = ? LIMIT 1').get(entityId) as { document_id: string } | undefined
+  if (!entity) return []
+  return db.prepare(`
+    SELECT c.content, c.document_id, d.file_name
+    FROM kb_chunks c
+    JOIN kb_documents d ON d.id = c.document_id
+    WHERE c.document_id = ?
+    ORDER BY c.chunk_index
+    LIMIT ?
+  `).all(entity.document_id, limit) as Array<{ content: string; document_id: string; file_name: string }>
+}
+
+// ============ Wiki 页面 CRUD ============
+
+export interface WikiPageRow {
+  id: string
+  slug: string
+  title: string
+  page_type: string
+  content: string | null
+  summary: string | null
+  in_links: string
+  out_links: string
+  source_refs: string
+  chunk_refs: string
+  content_hash: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface WikiPageSummary {
+  slug: string
+  title: string
+  page_type: string
+  link_count: number
+}
+
+// slug 生成：实体名 normalize 后 SHA1 前 16 位（与 entityId 一致，保证 [[slug]] 可解析）
+export function wikiSlug(name: string): string {
+  const normalized = name.trim().replace(/\s+/g, '').toLowerCase()
+  const hash = crypto.createHash('sha1').update(normalized).digest('hex').slice(0, 16)
+  return `wiki_${hash}`
+}
+
+export function createWikiPage(page: {
+  id: string
+  slug: string
+  title: string
+  pageType: string
+  content?: string
+  summary?: string
+  outLinks?: string[]
+  sourceRefs?: string[]
+  chunkRefs?: string[]
+  contentHash?: string
+}): void {
+  getKbDatabase()
+    .prepare(`INSERT OR REPLACE INTO kb_wiki_pages
+      (id, slug, title, page_type, content, summary, out_links, source_refs, chunk_refs, content_hash, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`)
+    .run(
+      page.id,
+      page.slug,
+      page.title,
+      page.pageType,
+      page.content ?? null,
+      page.summary ?? null,
+      JSON.stringify(page.outLinks ?? []),
+      JSON.stringify(page.sourceRefs ?? []),
+      JSON.stringify(page.chunkRefs ?? []),
+      page.contentHash ?? null
+    )
+}
+
+export function updateWikiPageContent(slug: string, content: string, summary: string, outLinks: string[], contentHash?: string): void {
+  getKbDatabase()
+    .prepare(`UPDATE kb_wiki_pages SET content = ?, summary = ?, out_links = ?, content_hash = ?, updated_at = datetime('now') WHERE slug = ?`)
+    .run(content, summary, JSON.stringify(outLinks), contentHash ?? null, slug)
+}
+
+export function updateWikiLinks(slug: string, inLinks: string[], outLinks: string[]): void {
+  getKbDatabase()
+    .prepare(`UPDATE kb_wiki_pages SET in_links = ?, out_links = ?, updated_at = datetime('now') WHERE slug = ?`)
+    .run(JSON.stringify(inLinks), JSON.stringify(outLinks), slug)
+}
+
+export function getWikiPage(slug: string): WikiPageRow | undefined {
+  return getKbDatabase().prepare('SELECT * FROM kb_wiki_pages WHERE slug = ?').get(slug) as WikiPageRow | undefined
+}
+
+export function listWikiPages(): WikiPageSummary[] {
+  const rows = getKbDatabase()
+    .prepare('SELECT slug, title, page_type, in_links, out_links FROM kb_wiki_pages')
+    .all() as Array<{ slug: string; title: string; page_type: string; in_links: string; out_links: string }>
+  return rows.map((r) => {
+    let inLinks: string[] = []
+    let outLinks: string[] = []
+    try { inLinks = JSON.parse(r.in_links || '[]') } catch { /* ignore */ }
+    try { outLinks = JSON.parse(r.out_links || '[]') } catch { /* ignore */ }
+    return { slug: r.slug, title: r.title, page_type: r.page_type, link_count: inLinks.length + outLinks.length }
+  })
+}
+
+export function listAllWikiPages(): WikiPageRow[] {
+  return getKbDatabase().prepare('SELECT * FROM kb_wiki_pages').all() as WikiPageRow[]
+}
+
+export function deleteAllWikiPages(): void {
+  getKbDatabase().exec('DELETE FROM kb_wiki_pages')
+}
+
+export function countWikiPages(): number {
+  return (getKbDatabase().prepare('SELECT COUNT(*) c FROM kb_wiki_pages').get() as { c: number }).c
 }

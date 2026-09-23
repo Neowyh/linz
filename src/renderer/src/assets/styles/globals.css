@@ -7,6 +7,11 @@
   --bg-page: #F4F6FA;
   --bg-card: #FFFFFF;
   --bg-sidebar: #FFFFFF;
+  /* 内容区/侧边栏底色：默认不透明；设置自定义背景时由 AppLayout 改写为 rgba 半透明 */
+  --content-bg: #F4F6FA;
+  --sidebar-bg: #FFFFFF;
+  /* 窗格底色：默认白；背景激活时设为 transparent，仅靠 --content-bg 一层半透明遮罩，避免多层叠加 */
+  --pane-bg: #FFFFFF;
   /* 边框：分层次的浅灰蓝 */
   --border-light: #EEF0F5;
   --border-default: #E4E8F0;

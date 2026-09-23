@@ -24,13 +24,37 @@ function rowToAgentSkill(row: any[]): AgentSkill {
   }
 }
 
+// 解析存成 JSON 字符串的数组字段为 string[]，并强制把每个元素规整为字符串
+// （对象取 name/id/label/value）。脏数据里若混入 { name: "aero" } 之类的对象，
+// 不规整会导致 target_agents.includes(agentType) 永不命中、技能无法触发，
+// 也会让前端渲染崩溃。空元素一并丢弃。
 function parseJsonArray(str: string): string[] {
+  let arr: unknown
   try {
-    const arr = JSON.parse(str || '[]')
-    return Array.isArray(arr) ? arr : []
+    arr = JSON.parse(str || '[]')
   } catch {
     return []
   }
+  if (!Array.isArray(arr)) return []
+  const out: string[] = []
+  for (const v of arr) {
+    let s: string
+    if (typeof v === 'string') s = v
+    else if (typeof v === 'number' || typeof v === 'boolean') s = String(v)
+    else if (v && typeof v === 'object') {
+      const o = v as Record<string, unknown>
+      s = typeof o.name === 'string' ? o.name
+        : typeof o.id === 'string' ? o.id
+        : typeof o.label === 'string' ? o.label
+        : typeof o.value === 'string' ? o.value
+        : (() => { try { return JSON.stringify(o) } catch { return '[object]' } })()
+    } else {
+      s = v == null ? '' : String(v)
+    }
+    s = s.trim()
+    if (s.length > 0) out.push(s)
+  }
+  return out
 }
 
 // 模块级缓存：仅缓存 enabled=1 的技能（运行时只需要启用的）
@@ -130,11 +154,12 @@ export function formatSkillsForPrompt(skills: AgentSkill[]): string {
   const blocks = skills.map((s) => {
     const desc = s.description ? `${s.description}\n\n` : ''
     let block = `### ${s.name}\n${desc}${s.content}`
-    // 技能包含可执行脚本时，告知 Agent 脚本位置与执行工具
+    // 技能包含技能包时，告知 Agent 可按需读取包内文件（渐进披露）与执行脚本
     if (s.package_path) {
+      block += `\n\n> 本技能附带技能包。SKILL.md 中引用的文件（如 reference/、assets/ 下的文档）可用 read_skill_file 工具按相对路径读取（参数 skill 为「${s.name}」，path 为包内相对路径如 "reference/react.md"），按需查阅而非一次性全部加载。`
       const scripts = listSkillScripts(s.package_path)
       if (scripts.length > 0) {
-        block += `\n\n> 本技能附带脚本（位于 ${s.package_path}），需要执行时使用 run_skill_script 工具：\n${scripts.map((f) => `> - ${f}`).join('\n')}`
+        block += `\n> 需要执行脚本时使用 run_skill_script 工具：\n${scripts.map((f) => `> - ${f}`).join('\n')}`
       }
     }
     return block
@@ -250,8 +275,12 @@ export function updateSkill(id: string, updates: UpdateSkillParams): { success: 
   const db = getDatabase()
   const existing = getSkill(id)
   if (!existing) return { success: false, error: '技能不存在' }
-  if (existing.is_builtin === 1) return { success: false, error: '内置技能不可修改' }
-  if (updates.name !== undefined && isSkillNameTaken(updates.name, id)) {
+  // 内置技能：知识内容（名称/描述/正文）只读，仅允许调整目标 Agent / 触发关键词 / 优先级
+  const isBuiltin = existing.is_builtin === 1
+  if (isBuiltin && (updates.name !== undefined || updates.description !== undefined || updates.content !== undefined)) {
+    return { success: false, error: '内置技能的知识内容（名称/描述/正文）不可修改，仅可调整目标 Agent、触发关键词与优先级' }
+  }
+  if (!isBuiltin && updates.name !== undefined && isSkillNameTaken(updates.name, id)) {
     return { success: false, error: `已存在同名技能「${updates.name.trim()}」，请换个名称` }
   }
 

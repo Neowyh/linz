@@ -3,14 +3,23 @@ import { v4 as uuidv4 } from 'uuid'
 import { useChatStore } from '../stores/chatStore'
 import { useConversationStore } from '../stores/conversationStore'
 import { useAgentStore } from '../stores/agentStore'
+import { asText } from '../utils/text'
 import type { ToolCallEntry, SkillTriggerInfo } from '../types/chat'
 
 // 解析 DB 中持久化的 tool_calls JSON；旧数据或解析失败返回 undefined
+// 历史脏数据里 input/output 可能存成了对象，直接渲染会触发 React #31 白屏，
+// 这里在加载时统一规整为字符串。
 function parseToolCalls(raw: string | null | undefined): ToolCallEntry[] | undefined {
   if (!raw) return undefined
   try {
     const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : undefined
+    if (!Array.isArray(parsed) || parsed.length === 0) return undefined
+    return parsed.map((c: any) => ({
+      ...c,
+      tool: asText(c.tool),
+      input: asText(c.input),
+      output: asText(c.output)
+    }))
   } catch {
     return undefined
   }
@@ -70,10 +79,10 @@ export function useChat() {
 
       // 添加用户消息到本地状态
       const userMsgId = uuidv4()
-      addUserMessage(userMsgId, content)
+      addUserMessage(convId, userMsgId, content)
 
       // 立即置为流式等待状态：模型首个 chunk 到达前，对话底部即显示"动态等待标志"
-      startStreaming(userMsgId)
+      startStreaming(convId, userMsgId)
 
       // 通知主进程处理，携带当前选择的 agent 与调度模式
       const { selectedAgent, dispatchMode } = useChatStore.getState()
@@ -90,6 +99,12 @@ export function useChat() {
 
   const loadConversation = useCallback(
     async (id: string) => {
+      // 命中内存缓存（切走但仍在流式/已完成的对话）→ 直接恢复、跳过 DB 重载，
+      // 避免把后台正在生成的回复用 DB 的旧状态覆盖丢失
+      if (useChatStore.getState().hasLiveConversationCache(id)) {
+        setConversation(id)
+        return
+      }
       setConversation(id)
       const detail = await window.aeromind.conversation.get(id)
       if (detail && detail.messages) {

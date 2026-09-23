@@ -9,6 +9,7 @@ import { useDockStore, collectPanes } from './dock/dockStore'
 import { useUIStore } from './stores/uiStore'
 import { buildDefaultLayout, ensureAnchorPane } from './dock/defaultLayout'
 import { loadLayout, saveLayout } from './dock/persistence'
+import { ErrorBoundary } from './components/ErrorBoundary'
 
 function App(): JSX.Element {
   // 启动时预加载 agent 列表（含自定义 agent），
@@ -22,6 +23,18 @@ function App(): JSX.Element {
     const panes = collectPanes(layout)
     if (!panes.some((p) => !p.anchor) && useUIStore.getState().companionPanesVisible) {
       useUIStore.getState().setCompanionPanesVisible(false)
+    }
+  }, [])
+
+  // 全局拖拽防护：阻止 Electron 默认行为（文件拖到窗口任意位置会用文件内容替换页面）
+  // 仅 preventDefault 不 stopPropagation，让输入框的 onDrop 正常处理文件
+  useEffect(() => {
+    const preventDefault = (e: DragEvent) => e.preventDefault()
+    document.addEventListener('dragover', preventDefault)
+    document.addEventListener('drop', preventDefault)
+    return () => {
+      document.removeEventListener('dragover', preventDefault)
+      document.removeEventListener('drop', preventDefault)
     }
   }, [])
 
@@ -84,7 +97,9 @@ function App(): JSX.Element {
         }
       }}
     >
-      <RouterProvider router={router} />
+      <ErrorBoundary>
+        <RouterProvider router={router} />
+      </ErrorBoundary>
     </ConfigProvider>
   )
 }

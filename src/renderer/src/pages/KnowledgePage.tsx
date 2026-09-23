@@ -4,6 +4,7 @@ import { DeleteOutlined, SearchOutlined, TagsOutlined, EditOutlined, FolderOpenO
 import MarkdownRenderer from '../components/Markdown/MarkdownRenderer'
 import KbTablesTab from '../components/KbTablesTab'
 import KbGraphTab from '../components/graph/KbGraphTab'
+import WikiTab from '../components/wiki/WikiTab'
 
 interface KbDocument {
   id: string
@@ -542,7 +543,8 @@ export default function KnowledgePage(): JSX.Element {
               )
             },
             { key: 'tables', label: '数据库', children: <KbTablesTab /> },
-            { key: 'graph', label: '知识图谱', children: <KbGraphTab /> }
+            { key: 'graph', label: '知识图谱', children: <KbGraphTab /> },
+            { key: 'wiki', label: 'Wiki', children: <WikiTab /> }
           ]}
         />
       </div>

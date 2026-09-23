@@ -18,6 +18,8 @@ import { initDefaultWorkspace, getWorkspaceDbPath, getWorkspaceKbPath, getWorksp
 import { mcpManager } from './mcp/manager'
 import { disposeAll as disposePiSessions } from './pi/session-manager'
 import { initDshShim, disposeDshShim } from './dsh'
+import { applyPendingUpdate } from './updater/patch-applier'
+import { checkForUpdates } from './updater/update-checker'
 
 // Win7 兼容开关：必须在 app.whenReady() 之前设置
 // 1. no-sandbox: Win7 渲染进程 sandbox 不稳定，必须关闭
@@ -66,6 +68,43 @@ let isQuitting = false
 app.whenReady().then(async () => {
   // 与 electron-builder.yml 的 appId 保持一致，确保 Windows 任务栏分组与通知归属正确
   electronApp.setAppUserModelId('com.linz.app')
+
+  // 应用暂存的更新（在窗口创建之前执行，确保新文件生效）
+  try {
+    const applied = await applyPendingUpdate()
+    if (applied) {
+      console.log('[Main] Pending update applied before startup')
+    }
+  } catch (err) {
+    console.error('[Main] Failed to apply pending update:', err)
+  }
+
+  // 处理 --apply-patch 命令行参数（离线补丁）
+  // 用户在 CLI 中传递此参数，或双击 .linzpatch 文件关联触发
+  const applyPatchPath = app.commandLine.getSwitchValue('apply-patch')
+  if (applyPatchPath) {
+    try {
+      const { validatePatchZip, extractPatchZip } = await import('./updater/offline-patch')
+      const validation = validatePatchZip(applyPatchPath)
+      if (!validation.valid) {
+        dialog.showErrorBox('补丁包无效', validation.error)
+        app.exit(1)
+      }
+      const result = await extractPatchZip(applyPatchPath)
+      if (!result.success) {
+        dialog.showErrorBox('补丁安装失败', result.error || '未知错误')
+        app.exit(1)
+      }
+      // 重启以使补丁生效（移除 --apply-patch 参数防止循环）
+      const newArgs = process.argv.filter(a => !a.startsWith('--apply-patch'))
+      app.relaunch({ args: newArgs })
+      app.quit()
+    } catch (err) {
+      console.error('[Main] Offline patch failed:', err)
+      dialog.showErrorBox('补丁安装失败', String(err))
+      app.exit(1)
+    }
+  }
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
@@ -134,6 +173,25 @@ app.whenReady().then(async () => {
   initDshShim(() => mainWindow).catch((err) => {
     console.warn('[Main] DSH shim init failed:', err)
   })
+
+  // 自动检查更新（如果配置了服务器地址且开启了自动检查）
+  const updateServerUrl = getAppConfig().get('updateServerUrl') as string
+  const updateAutoCheck = getAppConfig().get('updateAutoCheck') as boolean
+  if (updateServerUrl && updateAutoCheck) {
+    checkForUpdates(updateServerUrl).then((info) => {
+      if (info && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update:available', {
+          currentVersion: info.currentVersion,
+          latestVersion: info.latestVersion,
+          totalDownloadSize: info.totalDownloadSize,
+          fileCount: info.files.length,
+          changelog: info.changelog
+        })
+      }
+    }).catch((err) => {
+      console.warn('[Main] Update check failed:', err)
+    })
+  }
 
   // 启动所有自动任务调度
   startAllSchedulers()

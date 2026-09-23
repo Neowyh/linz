@@ -8,7 +8,7 @@ import { SimulationAgent } from './simulation.agent'
 import { DocumentationAgent } from './documentation.agent'
 import { RetrieverAgent } from './retriever.agent'
 import { agentRegistry } from './agent-registry'
-import { getBuiltinAgentOverrides, registerCustomAgentsFromDB } from './custom-agents.service'
+import { getBuiltinAgentOverrides, registerCustomAgentsFromDB, registerBuiltinDynamicAgents } from './custom-agents.service'
 import { registerBuiltinTools } from './tools'
 import type { StreamChunk, AgentContext, AgentOverrideConfig } from './base.agent'
 import { getLLMConfig, compressContext } from '../llm'
@@ -41,6 +41,9 @@ export function registerAllAgents(): void {
   agentRegistry.register(new SimulationAgent(overrides['simulation']))
   agentRegistry.register(new DocumentationAgent(overrides['documentation']))
   agentRegistry.register(new RetrieverAgent(overrides['retriever']))
+
+  // 注册无专门类的内置 agent（如 codereviewer，配置全在 DB seed，用 DynamicAgent 包装）
+  registerBuiltinDynamicAgents()
 
   // 注册自定义 Agent
   try {

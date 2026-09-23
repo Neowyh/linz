@@ -219,14 +219,24 @@ export default function AgentSkillsTab(): JSX.Element {
                       />
                     </Tooltip>
                     {skill.is_builtin ? (
-                      <Tooltip title="另存为自定义技能（可复制后修改）">
-                        <Button
-                          type="text"
-                          size="small"
-                          icon={<CopyOutlined />}
-                          onClick={() => handleDuplicate(skill)}
-                        />
-                      </Tooltip>
+                      <>
+                        <Tooltip title="编辑目标 Agent 与触发配置">
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<EditOutlined />}
+                            onClick={() => navigate(`/agent-skills/${skill.id}/edit`)}
+                          />
+                        </Tooltip>
+                        <Tooltip title="另存为自定义技能（可复制后修改）">
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<CopyOutlined />}
+                            onClick={() => handleDuplicate(skill)}
+                          />
+                        </Tooltip>
+                      </>
                     ) : (
                       <>
                         <Tooltip title="导出为 SKILL.md">

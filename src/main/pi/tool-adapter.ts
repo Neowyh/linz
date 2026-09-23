@@ -18,12 +18,20 @@ import { approvalManager } from '../security/approval-manager'
 import { writeAudit, type AuditDecision } from '../security/audit'
 import { getBlockedByArgs } from '../security/file-protection'
 import type { SecurityContext } from '../agents/base.agent'
+import { extractImageBlocks } from '../llm/image-protocol'
 
 // 安全上下文持有者：customTools 闭包在 session 创建时绑定，session 会被复用，
 // 而 messageId 每次对话都不同，故不能在闭包里直接捕获 securityContext。
 // 改为捕获此 holder 引用，runner 在每次 session.prompt() 前更新 holder.current。
 export interface SecurityContextHolder {
   current: SecurityContext | null
+}
+
+// 图片接收器：customTools execute 剥离出 base64 图片后通过此 holder 推给上层。
+// runner 每次 driveSession 时更新 push，指向当前 AsyncQueue，实现"Pi 历史不含 base64、
+// 图片仍能展示给用户"。
+export interface ImageSinkHolder {
+  push: ((images: string[]) => void) | null
 }
 
 // TypeBox schema 在运行时只是带 `~kind` 字段的普通对象（参见 typebox 源码 schema.mjs 的 IsKind 实现）
@@ -69,6 +77,43 @@ function withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   })
 }
 
+// 工具执行超时配置：与 DeepSeek 路径（stream-handler.ts invokeWithTimeout）保持一致。
+// 重型工具（html_to_word 生成大文档、browser 自动化）放宽超时，避免误杀；默认 120s。
+const DEFAULT_TOOL_TIMEOUT = 120_000
+const TOOL_TIMEOUT_OVERRIDES: Record<string, number> = {
+  html_to_word: 30 * 60 * 1000,
+  browser: 180_000
+}
+function getToolTimeout(name: string): number {
+  return TOOL_TIMEOUT_OVERRIDES[name] ?? DEFAULT_TOOL_TIMEOUT
+}
+
+// 用 AbortController 组合外部 signal 与超时：超时真正取消工具（而非仅 Promise.race），
+// 避免重型工具挂死整个 Pi session。超时抛普通 Error（走 execute catch 返回失败提示，
+// 让 Pi 继续）；外部 signal abort 仍以 AbortError 传播给 Pi（让会话停止）。
+async function invokeWithTimeout(tool: Tool, args: any, signal: AbortSignal | undefined): Promise<unknown> {
+  const timeout = getToolTimeout(tool.name)
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(), timeout)
+  const onExternalAbort = (): void => ac.abort()
+  if (signal) {
+    if (signal.aborted) ac.abort()
+    else signal.addEventListener('abort', onExternalAbort, { once: true })
+  }
+  try {
+    return await tool.invoke(args, { signal: ac.signal })
+  } catch (err: any) {
+    // 外部 signal abort（用户中断）→ 传播 AbortError 给 Pi
+    if (signal?.aborted) throw err
+    // 超时 abort → 转普通 Error，让 execute catch 返回失败提示而非停止会话
+    if (err?.name === 'AbortError') throw new Error(`工具执行超时（${timeout / 1000} 秒）`)
+    throw err
+  } finally {
+    clearTimeout(timer)
+    if (signal) signal.removeEventListener('abort', onExternalAbort)
+  }
+}
+
 export interface AdaptedTool {
   name: string
   label: string
@@ -79,7 +124,7 @@ export interface AdaptedTool {
 
 // 把单个 LangChain Tool 包装成 Pi ToolDefinition 形状，并在 execute 内执行安全门。
 // holder 可选：未提供时（不应发生）文件防护/策略 deny 仍生效，但 ask 路径 fail-closed 拒绝。
-export function adaptLangChainTool(tool: Tool, holder?: SecurityContextHolder): AdaptedTool {
+export function adaptLangChainTool(tool: Tool, holder?: SecurityContextHolder, imageSink?: ImageSinkHolder): AdaptedTool {
   const name = tool.name
   const description = (tool as any).description || `工具 ${name}`
   return {
@@ -171,12 +216,16 @@ export function adaptLangChainTool(tool: Tool, holder?: SecurityContextHolder): 
       // ===== 执行工具 =====
       auditStarted = Date.now()
       try {
-        const result = await tool.invoke(args, signal ? { signal } : undefined)
-        const text = toStringResult(result)
-        if (ctx) {
-          writeAudit({ ...auditBase, decision: auditDecision, source: auditSource, durationMs: Date.now() - auditStarted })
-        }
-        return { content: [{ type: 'text', text: text || '(工具无输出)' }], details: undefined }
+      const result = await invokeWithTimeout(tool, args, signal)
+      const rawText = toStringResult(result)
+      // 剥离 IMAGE 块：base64 不进 Pi session 历史，避免后续 prompt 越来越慢。
+      // 剥离出的图片通过 imageSink 推给上层 runner，转成 markdown 图片展示给用户。
+      const { cleanText, images } = extractImageBlocks(rawText)
+      if (images.length > 0) imageSink?.push?.(images)
+      if (ctx) {
+        writeAudit({ ...auditBase, decision: auditDecision, source: auditSource, durationMs: Date.now() - auditStarted })
+      }
+      return { content: [{ type: 'text', text: cleanText || '(工具无输出)' }], details: undefined }
       } catch (err: any) {
         // abort 传播给 Pi（让会话停止），不当作普通工具失败
         if (err?.name === 'AbortError' || signal?.aborted) throw err
@@ -190,15 +239,15 @@ export function adaptLangChainTool(tool: Tool, holder?: SecurityContextHolder): 
   }
 }
 
-export function adaptLangChainTools(tools: Tool[], holder?: SecurityContextHolder): AdaptedTool[] {
-  return tools.map((t) => adaptLangChainTool(t, holder))
+export function adaptLangChainTools(tools: Tool[], holder?: SecurityContextHolder, imageSink?: ImageSinkHolder): AdaptedTool[] {
+  return tools.map((t) => adaptLangChainTool(t, holder, imageSink))
 }
 
 // 转成 createAgentSession 期望的 customTools 格式
 // Pi SDK 的 ToolDefinition 字段比 AdaptedTool 多（renderCall/renderResult 等），
 // 但都可选；这里只填必要字段。
-export function toPiCustomTools(tools: Tool[], holder?: SecurityContextHolder): any[] {
-  return adaptLangChainTools(tools, holder).map((t) => ({
+export function toPiCustomTools(tools: Tool[], holder?: SecurityContextHolder, imageSink?: ImageSinkHolder): any[] {
+  return adaptLangChainTools(tools, holder, imageSink).map((t) => ({
     name: t.name,
     label: t.label,
     description: t.description,

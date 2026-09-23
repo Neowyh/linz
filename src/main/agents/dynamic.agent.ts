@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid'
 import { AgentStateMachine } from './agent-state-machine'
 import { resolveToolsByNames, getToolsForAgent } from './tools'
-import type { IAgent, AgentConfig, AgentState, StreamChunk, AgentContext, AgentStatusData, AgentMessage } from './base.agent'
+import type { IAgent, AgentConfig, AgentEngine, AgentState, StreamChunk, AgentContext, AgentStatusData, AgentMessage } from './base.agent'
 import { BaseAgent } from './base.agent'
 import type { Tool } from '@langchain/core/tools'
 
@@ -34,7 +34,7 @@ export interface CustomAgentRow {
   usage_count: number
   created_at: string
   updated_at: string
-  engine: string         // 'deepseek' | 'pi'
+  engine: AgentEngine    // 'deepseek' | 'pi'
   kb_tags: string        // JSON array string：知识库限定标签（knowledge_search 只检索这些标签的文档）
 }
 
@@ -52,7 +52,7 @@ export class DynamicAgent extends BaseAgent {
       modelName: row.model_name || 'deepseek-chat',
       icon: row.icon || '🎯',
       delegatesTo: safeParseArray(row.delegates_to),
-      engine: (row.engine as 'deepseek' | 'pi') || 'deepseek'
+      engine: row.engine || 'deepseek'
     }
     this.systemPrompt = row.system_prompt
     this.toolNames = safeParseArray(row.tools)

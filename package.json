@@ -1,6 +1,6 @@
 {
   "name": "linz",
-  "version": "0.1.0",
+  "version": "1.0.2",
   "description": "临智 LINZ - 多Agent飞行器协同设计软件",
   "main": "./out/main/index.js",
   "author": "LINZ Team",
@@ -8,10 +8,11 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "postinstall": "electron-builder install-app-deps",
+    "postinstall": "electron-builder install-app-deps && node scripts/patch-pi-tui.cjs",
     "preview": "electron-vite preview",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
+    "patch": "npm run build && npm run pack && node scripts/gen-manifest.cjs && node scripts/gen-patch.cjs --new manifest.json",
     "test:sandbox": "esbuild scripts/sandbox-test.ts --bundle --platform=node --format=esm --outfile=scripts/.sandbox-test.mjs && node scripts/.sandbox-test.mjs"
   },
   "dependencies": {

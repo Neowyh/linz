@@ -415,7 +415,15 @@ export interface AeromindAPI {
     graphLlmEnrich(docIds: string[]): Promise<{ done: number; skipped: number; failed: number; entityCount: number }>
     graphClearEnrichment(docIds?: string[]): Promise<{ success: boolean }>
     graphAsk(question: string, docIds: string[]): Promise<{ answer: string; sources: Array<{ file_name: string; snippet: string }> }>
+    graphSearchEntities(query: string): Promise<{ entities: Array<{ entityId: string; entityName: string; entityType: string; documentId: string; fileName: string }>; relations: Array<{ sourceName: string; targetName: string; label: string }>; chunks: Array<{ content: string; document_id: string; file_name: string }> }>
     onGraphEnrichProgress(callback: (data: GraphEnrichProgress) => void): () => void
+    wikiGenerate(): Promise<{ pages: number; done: number; skipped: number; failed: number }>
+    wikiGetGraph(options?: { mode?: string; center?: string; depth?: number; limit?: number; types?: string[] }): Promise<{ nodes: Array<{ slug: string; title: string; pageType: string; linkCount: number }>; edges: Array<{ source: string; target: string }>; meta: { mode: string; total: number; returned: number; truncated: boolean; center?: string; depth?: number } }>
+    wikiGetPage(slug: string): Promise<{ id: string; slug: string; title: string; pageType: string; content: string | null; summary: string | null; inLinks: string[]; outLinks: string[]; sourceRefs: string[]; chunkRefs: string[] } | null>
+    wikiListPages(): Promise<Array<{ slug: string; title: string; page_type: string; link_count: number }>>
+    wikiDeleteAll(): Promise<{ success: boolean }>
+    wikiStatus(): Promise<{ hasWiki: boolean; pageCount: number }>
+    onWikiProgress(callback: (data: { total: number; done: number; title: string; status: string; error?: string }) => void): () => void
   }
   tables: {
     list(): Promise<TableDataset[]>
@@ -423,16 +431,6 @@ export interface AeromindAPI {
     preview(tableName: string, limit?: number): Promise<TableQueryPayload>
     remove(datasetId: string): Promise<{ success: boolean; error?: string }>
     query(sql: string): Promise<TableQueryPayload>
-  }
-  token: {
-    getUsage(): Promise<{ inputTokens: number; outputTokens: number }>
-    getBudget(): Promise<{
-      monthlyLimit: number
-      warningThreshold: number
-      enabled: boolean
-      currentUsage: { inputTokens: number; outputTokens: number }
-      percentage: number
-    }>
   }
   export: {
     saveDialog(options: { format: string; defaultPath?: string }): Promise<string | null>
@@ -546,6 +544,23 @@ export interface AeromindAPI {
     listPlugins(): Promise<Array<{ name: string; version: string; packageDir: string }>>
     installPlugin(packageDir: string): Promise<{ success: boolean; name?: string; error?: string }>
     onOpenSessionRequest(callback: (sessionId: string) => void): () => void
+  }
+  background: {
+    pickImage(): Promise<{ dataUrl: string; fileName: string } | { error: string } | null>
+    getImage(): Promise<{ dataUrl: string; fileName: string } | null>
+    clearImage(): Promise<{ success: boolean }>
+  }
+  update: {
+    checkForUpdates(): Promise<any>
+    downloadUpdate(): Promise<{ success: boolean; error?: string }>
+    applyAndRestart(): Promise<{ success: boolean }>
+    getStatus(): Promise<any>
+    getCurrentVersion(): Promise<string>
+    onDownloadProgress(callback: (data: any) => void): () => void
+    onDownloadComplete(callback: (data: { version: string }) => void): () => void
+    onUpdateAvailable(callback: (data: any) => void): () => void
+    pickPatchFile(): Promise<string | null>
+    applyOfflinePatch(zipPath: string): Promise<{ success: boolean; error?: string; needsRestart?: boolean; fromVersion?: string; toVersion?: string }>
   }
 }
 

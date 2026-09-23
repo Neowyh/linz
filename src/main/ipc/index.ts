@@ -20,6 +20,8 @@ import { registerApprovalIPC } from './approval.ipc'
 import { registerStepIPC } from './step.ipc'
 import { registerBrowserIPC } from './browser.ipc'
 import { registerDshIPC } from './dsh.ipc'
+import { registerBackgroundIPC } from './background.ipc'
+import { registerUpdateIPC } from './update.ipc'
 
 export function registerAllIPC(mainWindow: BrowserWindow): void {
   registerChatIPC(mainWindow)
@@ -43,4 +45,6 @@ export function registerAllIPC(mainWindow: BrowserWindow): void {
   registerStepIPC()
   registerBrowserIPC()
   registerDshIPC(mainWindow)
+  registerBackgroundIPC(mainWindow)
+  registerUpdateIPC(mainWindow)
 }

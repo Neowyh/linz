@@ -2,17 +2,6 @@ import Store from 'electron-store'
 import { safeStorage } from 'electron'
 import { v4 as uuidv4 } from 'uuid'
 
-export interface TokenBudget {
-  monthlyLimit: number
-  warningThreshold: number
-  enabled: boolean
-}
-
-export interface TokenUsageMonth {
-  inputTokens: number
-  outputTokens: number
-}
-
 export interface OllamaConfig {
   baseURL: string
   modelName: string
@@ -44,8 +33,6 @@ interface AppConfigSchema {
   modelName: string
   baseURL: string
   fallbackModel: string
-  tokenBudget: TokenBudget
-  tokenUsage: Record<string, TokenUsageMonth>
   contextCompressionThreshold: number
   theme: 'light' | 'dark' | 'system'
   ollama: OllamaConfig
@@ -59,10 +46,16 @@ interface AppConfigSchema {
   toolPermissions: Record<string, ToolPolicyAction>  // 按工具策略覆盖：allow/ask/deny（全局按工具粒度）
   rememberedApprovals: RememberedApproval[]  // 用户"始终允许"的操作（按指纹精确匹配，可撤销）
   approvalTimeoutMs: number  // 审批等待超时（毫秒），超时自动拒绝，默认 120000
+  maxToolRounds: number  // 多轮工具调用最大轮数（防止 LLM 陷入死循环），默认 100；设置页可调
   restrictNetwork: boolean  // 脚本执行尽力禁网（Windows 上为尽力而为）
   permissionMode: 'default' | 'full'  // default=每类危险操作逐次询问 | full=完全访问（仅文件写入仍提醒，其余放行）
   protectedPaths: string[]  // 文件防护：受保护的敏感文件/目录，Agent 工具访问时一律拦截
   quitOnClose: boolean  // 生产模式下关闭窗口时退出进程（true=退出，false=最小化到托盘）
+  backgroundImage: string  // 自定义背景图片的绝对路径（复制到 userData/backgrounds/ 下），空串表示未设置
+  backgroundFit: 'cover' | 'contain' | 'center' | 'repeat'  // 背景填充模式
+  backgroundOpacity: number  // 内容遮罩透明度 0–1（背景激活时侧边栏/工作区底色透明度）
+  updateServerUrl: string  // 补丁更新服务器地址（空串=禁用在线更新）
+  updateAutoCheck: boolean  // 启动时自动检查更新（默认 true）
 }
 
 let appConfig: Store<AppConfigSchema>
@@ -74,12 +67,6 @@ const defaults: AppConfigSchema = {
   modelName: 'deepseek-chat',
   baseURL: 'https://api.deepseek.com',
   fallbackModel: '',
-  tokenBudget: {
-    monthlyLimit: 1000000,
-    warningThreshold: 0.8,
-    enabled: true
-  },
-  tokenUsage: {},
   contextCompressionThreshold: 200000,
   theme: 'system',
   ollama: {
@@ -97,10 +84,16 @@ const defaults: AppConfigSchema = {
   toolPermissions: {},
   rememberedApprovals: [],
   approvalTimeoutMs: 120000,
+  maxToolRounds: 100,
   restrictNetwork: false,
   permissionMode: 'default',
   protectedPaths: [],
-  quitOnClose: true
+  quitOnClose: true,
+  backgroundImage: '',
+  backgroundFit: 'cover',
+  backgroundOpacity: 0.85,
+  updateServerUrl: '',
+  updateAutoCheck: true
 }
 
 export function getAppConfig(): Store<AppConfigSchema> {
@@ -150,43 +143,6 @@ export function setApiKeyEncrypted(plain: string): void {
     console.warn('[Config] safeStorage 不可用，API key 仍以明文存储')
     config.set('apiKey', plain)
   }
-}
-
-function getCurrentMonthKey(): string {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
-}
-
-export function getCurrentMonthUsage(): TokenUsageMonth {
-  const config = getAppConfig()
-  const key = getCurrentMonthKey()
-  return (config.get(`tokenUsage.${key}`) as TokenUsageMonth | undefined) || { inputTokens: 0, outputTokens: 0 }
-}
-
-export function addTokenUsage(inputTokens: number, outputTokens: number): void {
-  const config = getAppConfig()
-  const key = getCurrentMonthKey()
-  const current: TokenUsageMonth = (config.get(`tokenUsage.${key}`) as TokenUsageMonth | undefined) || { inputTokens: 0, outputTokens: 0 }
-  config.set(`tokenUsage.${key}`, {
-    inputTokens: current.inputTokens + inputTokens,
-    outputTokens: current.outputTokens + outputTokens
-  })
-}
-
-export function isOverBudget(): boolean {
-  const config = getAppConfig()
-  const budget = config.get('tokenBudget')
-  if (!budget.enabled) return false
-  const usage = getCurrentMonthUsage()
-  return (usage.inputTokens + usage.outputTokens) >= budget.monthlyLimit
-}
-
-export function getBudgetPercentage(): number {
-  const config = getAppConfig()
-  const budget = config.get('tokenBudget')
-  if (!budget.monthlyLimit) return 0
-  const usage = getCurrentMonthUsage()
-  return (usage.inputTokens + usage.outputTokens) / budget.monthlyLimit
 }
 
 // --- Workspace helpers ---

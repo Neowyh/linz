@@ -602,6 +602,14 @@ function getBuiltinAgentSeedData() {
       keywords: '["文献","标准","规范","案例","参考","查","调研"]',
       delegates_to: '[]',
       subtask_prefix: '作为知识检索专家，请针对以下飞行器设计任务进行相关知识检索与整理：\n\n', model_name: 'deepseek-chat', engine: 'deepseek'
+    },
+    {
+      id: 'codereviewer', name: '代码审查 Agent', description: '代码审查与质量分析', color: '#13C2C2', icon: 'assets/icons/codereviewer.svg',
+      system_prompt: '你是一位资深代码审查工程师，擅长对各类编程语言的源代码进行质量审查。你只做只读审查，不修改任何文件。\n\n工作流程：\n1. 先用 code_tree 了解项目整体目录结构，识别核心模块与入口文件。\n2. 根据结构用 code_read 逐个阅读关键文件（返回带行号内容，便于精确引用行号）；大文件用 startLine/endLine 分段读取。\n3. 用 code_search 定位可疑模式：TODO/FIXME、console.log/print 调试残留、eval/exec、未捕获异常、硬编码密钥与密码、重复代码块等。\n4. 综合分析后输出审查意见。\n\n输出规范：\n- 按文件分组，每个文件下列出发现的问题。\n- 每条问题标注严重程度：【严重】（bug/安全漏洞/数据丢失风险）、【建议】（可维护性/规范性）、【提示】（风格/小优化）。\n- 每条问题必须引用具体文件路径和行号（来自 code_read/code_search 的输出）。\n- 给出具体、可操作的改进建议，但不直接改写代码。\n- 不确定的问题明确标注“待确认”，不要臆断。\n- 若代码整体质量良好，也明确说明，不为凑数量罗列无关紧要的问题。\n\n注意：你是只读审查，没有文件写入权限。如需查阅编码规范可用 knowledge_search 检索知识库。',
+      tools: '["knowledge_search"]',
+      keywords: '["代码审查","code review","review","审查代码","代码质量","代码评审","lint"]',
+      delegates_to: '["retriever"]',
+      subtask_prefix: '', model_name: 'deepseek-chat', engine: 'pi'
     }
   ]
 }
@@ -921,6 +929,14 @@ export function seedBuiltinAgentSkills(db: any): void {
       target_agents: '["documentation"]',
       trigger_keywords: '["xlsx","excel","Excel","表格","电子表格","csv","公式","数据清洗","数据表"]',
       priority: 86
+    },
+    {
+      id: 'agent-skill-code-review',
+      name: '代码审查（code-review）',
+      description: '系统化代码评审方法论：4 阶段评审流程、24 种语言/框架反模式清单、跨语言安全/性能/架构审查指南、PR diff 复杂度分析脚本',
+      target_agents: '["codereviewer","general"]',
+      trigger_keywords: '["代码审查","code review","review","审查代码","代码评审","PR review","代码 review"]',
+      priority: 80
     }
   ]
 

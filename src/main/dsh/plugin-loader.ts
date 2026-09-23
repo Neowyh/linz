@@ -2,6 +2,7 @@ import { app } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
 import { pathToFileURL } from 'node:url'
+import { resolveBundledPath } from '../resources'
 import type { CordisContext, DshPluginDescriptor, DshPluginModule, DshPluginConfig } from './types'
 
 const PLUGINS_DIR = path.join(app.getPath('userData'), 'dsh-plugins')
@@ -28,6 +29,9 @@ export class PluginLoader {
   constructor(private readonly ctx: CordisContext) {}
 
   async startAll(): Promise<void> {
+    // 将随包携带的 DSH 插件复制到 userData/dsh-plugins/（首次运行或版本更新时）
+    await this.seedBundledPlugins()
+
     if (!fs.existsSync(PLUGINS_DIR)) {
       fs.mkdirSync(PLUGINS_DIR, { recursive: true })
       return
@@ -42,6 +46,58 @@ export class PluginLoader {
       } catch (err) {
         console.error(`[DSH] Failed to load plugin ${entry.name}:`, err)
       }
+    }
+  }
+
+  /**
+   * 将随包携带的 DSH 插件从 resources/dsh-plugins/ 复制到 userData/dsh-plugins/。
+   *
+   * 打包后插件位于 <安装目录>/resources/dsh-plugins/<name>/（脱离 asar），
+   * 但 PluginLoader 只扫描 userData/dsh-plugins/，因此需要在首次启动时
+   * 将随包插件复制过去。已安装且版本相同的插件会被跳过，避免覆盖用户改动。
+   */
+  private async seedBundledPlugins(): Promise<void> {
+    const bundledDir = resolveBundledPath('dsh-plugins')
+    if (!fs.existsSync(bundledDir)) return
+
+    fs.mkdirSync(PLUGINS_DIR, { recursive: true })
+
+    const entries = fs.readdirSync(bundledDir, { withFileTypes: true })
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const sourceDir = path.join(bundledDir, entry.name)
+      const targetDir = path.join(PLUGINS_DIR, entry.name)
+      if (!this.shouldSeedPlugin(sourceDir, targetDir)) continue
+
+      try {
+        fs.cpSync(sourceDir, targetDir, { recursive: true, force: true })
+        console.log(`[DSH] Seeded bundled plugin: ${entry.name}`)
+      } catch (err) {
+        console.error(`[DSH] Failed to seed bundled plugin ${entry.name}:`, err)
+      }
+    }
+  }
+
+  /**
+   * 判断是否需要复制随包插件：
+   * - 目标不存在 → 复制（全新安装）
+   * - 版本不同 → 覆盖更新（应用升级后自动更新插件）
+   * - 版本相同 → 跳过
+   */
+  private shouldSeedPlugin(sourceDir: string, targetDir: string): boolean {
+    const sourcePkgPath = path.join(sourceDir, 'package.json')
+    if (!fs.existsSync(sourcePkgPath)) return false
+
+    const targetPkgPath = path.join(targetDir, 'package.json')
+    if (!fs.existsSync(targetPkgPath)) return true
+
+    try {
+      const sourcePkg = JSON.parse(fs.readFileSync(sourcePkgPath, 'utf8'))
+      const targetPkg = JSON.parse(fs.readFileSync(targetPkgPath, 'utf8'))
+      return sourcePkg.version !== targetPkg.version
+    } catch {
+      // package.json 解析失败，保守复制
+      return true
     }
   }
 

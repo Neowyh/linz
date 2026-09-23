@@ -5,6 +5,9 @@ import { createChatModel } from '../llm'
 import { streamChat } from '../llm/stream-handler'
 import * as kb from '../database/kb'
 import { buildGraph, enrichDocuments } from '../graph/graph-builder'
+import { enhanceSearchWithGraph, graphSearch } from '../graph/graph-rag'
+import { generateWiki } from '../wiki/wiki-generator'
+import { getWikiGraph } from '../wiki/wiki-graph'
 import { startImport, isImportRunning, type ImportSummary } from '../kb/import-manager'
 
 export type SearchResult = kb.KbSearchResult
@@ -105,12 +108,42 @@ export function formatRagContext(results: Array<SearchResult>): string {
   return text.substring(0, MAX_RAG_CONTEXT_LENGTH) + '\n\n...(更多检索结果已省略)'
 }
 
-// 文档行 → IPC 传输对象（tags 解析为数组）
-function docToPayload(row: kb.KbDocumentRow): Record<string, unknown> {
-  let tags: string[] = []
+// 把存成 JSON 字符串的 tags 列解析为 string[]，强制把每个元素规整为字符串
+// （对象取 name/id/label/value），避免脏数据导致前端渲染崩溃。
+function parseTagStrings(tagsJson: string | null | undefined): string[] {
+  let arr: unknown
   try {
-    tags = JSON.parse(row.tags || '[]')
-  } catch { /* ignore */ }
+    arr = JSON.parse(tagsJson || '[]')
+  } catch {
+    return []
+  }
+  if (!Array.isArray(arr)) return []
+  const out: string[] = []
+  for (const v of arr) {
+    let s: string
+    if (typeof v === 'string') s = v
+    else if (typeof v === 'number' || typeof v === 'boolean') s = String(v)
+    else if (v && typeof v === 'object') {
+      const o = v as Record<string, unknown>
+      s = typeof o.name === 'string' ? o.name
+        : typeof o.id === 'string' ? o.id
+        : typeof o.label === 'string' ? o.label
+        : typeof o.value === 'string' ? o.value
+        : (() => { try { return JSON.stringify(o) } catch { return '[object]' } })()
+    } else {
+      s = v == null ? '' : String(v)
+    }
+    s = s.trim()
+    if (s.length > 0) out.push(s)
+  }
+  return out
+}
+
+// 文档行 → IPC 传输对象（tags 解析为 string[]）
+// 注意：历史/导入数据里个别 tag 可能存成了对象（如 { name: "气动" }），
+// 直接 JSON.parse 出来 .map 渲染会触发 React 致命错误，这里强制规整为字符串。
+function docToPayload(row: kb.KbDocumentRow): Record<string, unknown> {
+  const tags = parseTagStrings(row.tags)
   return {
     id: row.id,
     file_path: row.file_path,
@@ -262,8 +295,10 @@ export function registerKnowledgeIPC(mainWindow: BrowserWindow): void {
   })
 
   // 向知识库提问（检索相关内容后交给LLM回答）
+  // GraphRAG 增强：当图谱实体存在时，用实体匹配补充检索结果
   ipcMain.handle('kb:ask', async (_event, question: string, tags?: string[]) => {
-    const searchResults = await hybridSearch(question, { limit: 5, tags }).catch(() => searchChunks(question, 5, tags))
+    const baseResults = await hybridSearch(question, { limit: 5, tags }).catch(() => searchChunks(question, 5, tags))
+    const searchResults = await enhanceSearchWithGraph(question, baseResults, 5)
     if (searchResults.length === 0) return { answer: '未找到相关知识库内容。', sources: [] }
 
     const ragContext = formatRagContext(searchResults)
@@ -347,5 +382,78 @@ export function registerKnowledgeIPC(mainWindow: BrowserWindow): void {
     } catch (err: any) {
       return { answer: `检索到 ${searchResults.length} 条相关内容，但生成回答失败: ${err.message}`, sources }
     }
+  })
+
+  // GraphRAG：按查询搜索图谱实体+关系+关联文档片段（供 UI / Agent 调用）
+  ipcMain.handle('kb:graph:searchEntities', async (_event, query: string) => {
+    if (typeof query !== 'string' || !query.trim()) {
+      return { entities: [], relations: [], chunks: [] }
+    }
+    return graphSearch(query.trim())
+  })
+
+  // ============ Wiki 知识图谱 ============
+
+  // 生成 Wiki（逐实体 LLM 生成，进度推 kb:wiki:progress）
+  ipcMain.handle('kb:wiki:generate', async (event) => {
+    const result = await generateWiki((p) => {
+      if (!event.sender.isDestroyed()) event.sender.send('kb:wiki:progress', p)
+    })
+    return result
+  })
+
+  // 获取链接图谱（overview / ego 模式）
+  ipcMain.handle('kb:wiki:getGraph', async (_event, options?: { mode?: string; center?: string; depth?: number; limit?: number; types?: string[] }) => {
+    return getWikiGraph({
+      mode: (options?.mode as 'overview' | 'ego') || 'overview',
+      center: options?.center,
+      depth: options?.depth,
+      limit: options?.limit,
+      types: options?.types
+    })
+  })
+
+  // 获取单个页面内容
+  ipcMain.handle('kb:wiki:getPage', async (_event, slug: string) => {
+    if (typeof slug !== 'string' || !slug) return null
+    const page = kb.getWikiPage(slug)
+    if (!page) return null
+    let inLinks: string[] = []
+    let outLinks: string[] = []
+    let sourceRefs: string[] = []
+    let chunkRefs: string[] = []
+    try { inLinks = JSON.parse(page.in_links || '[]') } catch { /* ignore */ }
+    try { outLinks = JSON.parse(page.out_links || '[]') } catch { /* ignore */ }
+    try { sourceRefs = JSON.parse(page.source_refs || '[]') } catch { /* ignore */ }
+    try { chunkRefs = JSON.parse(page.chunk_refs || '[]') } catch { /* ignore */ }
+    return {
+      id: page.id,
+      slug: page.slug,
+      title: page.title,
+      pageType: page.page_type,
+      content: page.content,
+      summary: page.summary,
+      inLinks,
+      outLinks,
+      sourceRefs,
+      chunkRefs
+    }
+  })
+
+  // 列出所有页面摘要
+  ipcMain.handle('kb:wiki:listPages', async () => {
+    return kb.listWikiPages()
+  })
+
+  // 删除所有 Wiki 页面
+  ipcMain.handle('kb:wiki:deleteAll', async () => {
+    kb.deleteAllWikiPages()
+    return { success: true }
+  })
+
+  // Wiki 状态检查
+  ipcMain.handle('kb:wiki:status', async () => {
+    const count = kb.countWikiPages()
+    return { hasWiki: count > 0, pageCount: count }
   })
 }

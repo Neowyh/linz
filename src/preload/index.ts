@@ -310,6 +310,9 @@ const api = {
     graphAsk: (question: string, docIds: string[]): Promise<{ answer: string; sources: Array<{ file_name: string; snippet: string }> }> => {
       return ipcRenderer.invoke('kb:graph:ask', question, docIds)
     },
+    graphSearchEntities: (query: string): Promise<{ entities: Array<{ entityId: string; entityName: string; entityType: string; documentId: string; fileName: string }>; relations: Array<{ sourceName: string; targetName: string; label: string }>; chunks: Array<{ content: string; document_id: string; file_name: string }> }> => {
+      return ipcRenderer.invoke('kb:graph:searchEntities', query)
+    },
     onGraphEnrichProgress: (callback: (data: any) => void): (() => void) => {
       const handler = (_event: Electron.IpcRendererEvent, data: any): void => {
         callback(data)
@@ -317,6 +320,33 @@ const api = {
       ipcRenderer.on('kb:graph:enrichProgress', handler)
       return () => {
         ipcRenderer.removeListener('kb:graph:enrichProgress', handler)
+      }
+    },
+    wikiGenerate: (): Promise<{ pages: number; done: number; skipped: number; failed: number }> => {
+      return ipcRenderer.invoke('kb:wiki:generate')
+    },
+    wikiGetGraph: (options?: { mode?: string; center?: string; depth?: number; limit?: number; types?: string[] }): Promise<any> => {
+      return ipcRenderer.invoke('kb:wiki:getGraph', options)
+    },
+    wikiGetPage: (slug: string): Promise<any> => {
+      return ipcRenderer.invoke('kb:wiki:getPage', slug)
+    },
+    wikiListPages: (): Promise<Array<{ slug: string; title: string; page_type: string; link_count: number }>> => {
+      return ipcRenderer.invoke('kb:wiki:listPages')
+    },
+    wikiDeleteAll: (): Promise<{ success: boolean }> => {
+      return ipcRenderer.invoke('kb:wiki:deleteAll')
+    },
+    wikiStatus: (): Promise<{ hasWiki: boolean; pageCount: number }> => {
+      return ipcRenderer.invoke('kb:wiki:status')
+    },
+    onWikiProgress: (callback: (data: any) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: any): void => {
+        callback(data)
+      }
+      ipcRenderer.on('kb:wiki:progress', handler)
+      return () => {
+        ipcRenderer.removeListener('kb:wiki:progress', handler)
       }
     }
   },
@@ -336,21 +366,6 @@ const api = {
     },
     query: (sql: string): Promise<any> => {
       return ipcRenderer.invoke('tables:query', sql)
-    }
-  },
-
-  token: {
-    getUsage: (): Promise<{ inputTokens: number; outputTokens: number }> => {
-      return ipcRenderer.invoke('token:getUsage')
-    },
-    getBudget: (): Promise<{
-      monthlyLimit: number
-      warningThreshold: number
-      enabled: boolean
-      currentUsage: { inputTokens: number; outputTokens: number }
-      percentage: number
-    }> => {
-      return ipcRenderer.invoke('token:getBudget')
     }
   },
 
@@ -650,6 +665,70 @@ const api = {
       return () => {
         ipcRenderer.removeListener('dsh:openSessionRequest', handler)
       }
+    }
+  },
+
+  background: {
+    pickImage: (): Promise<{ dataUrl: string; fileName: string } | { error: string } | null> => {
+      return ipcRenderer.invoke('background:pickImage')
+    },
+    getImage: (): Promise<{ dataUrl: string; fileName: string } | null> => {
+      return ipcRenderer.invoke('background:getImage')
+    },
+    clearImage: (): Promise<{ success: boolean }> => {
+      return ipcRenderer.invoke('background:clearImage')
+    }
+  },
+
+  update: {
+    checkForUpdates: (): Promise<any> => {
+      return ipcRenderer.invoke('update:check')
+    },
+    downloadUpdate: (): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke('update:download')
+    },
+    applyAndRestart: (): Promise<{ success: boolean }> => {
+      return ipcRenderer.invoke('update:applyAndRestart')
+    },
+    getStatus: (): Promise<any> => {
+      return ipcRenderer.invoke('update:getStatus')
+    },
+    getCurrentVersion: (): Promise<string> => {
+      return ipcRenderer.invoke('update:getCurrentVersion')
+    },
+    onDownloadProgress: (callback: (data: any) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: any): void => {
+        callback(data)
+      }
+      ipcRenderer.on('update:downloadProgress', handler)
+      return () => {
+        ipcRenderer.removeListener('update:downloadProgress', handler)
+      }
+    },
+    onDownloadComplete: (callback: (data: { version: string }) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { version: string }): void => {
+        callback(data)
+      }
+      ipcRenderer.on('update:downloadComplete', handler)
+      return () => {
+        ipcRenderer.removeListener('update:downloadComplete', handler)
+      }
+    },
+    onUpdateAvailable: (callback: (data: any) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: any): void => {
+        callback(data)
+      }
+      ipcRenderer.on('update:available', handler)
+      return () => {
+        ipcRenderer.removeListener('update:available', handler)
+      }
+    },
+
+    pickPatchFile: (): Promise<string | null> => {
+      return ipcRenderer.invoke('update:pickPatchFile')
+    },
+    applyOfflinePatch: (zipPath: string): Promise<{ success: boolean; error?: string; needsRestart?: boolean; fromVersion?: string; toVersion?: string }> => {
+      return ipcRenderer.invoke('update:applyOfflinePatch', zipPath)
     }
   }
 }

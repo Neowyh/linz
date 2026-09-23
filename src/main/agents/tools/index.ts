@@ -4,6 +4,7 @@ import { getDatabase } from '../../database'
 import { calculatorTool } from './calculator.tool'
 import { aeroCalculatorTool } from './aero-calculator.tool'
 import { knowledgeSearchTool, createKnowledgeSearchTool } from './knowledge-search.tool'
+import { knowledgeGraphSearchTool } from './knowledge-graph-search.tool'
 import { dbTablesTool, dbQueryTool } from './db-query.tool'
 import { runSkillScriptTool } from './run-skill-script.tool'
 import { htmlToWordTool } from './html-to-word.tool'
@@ -12,14 +13,16 @@ import { nodeTool } from './node.tool'
 import { browserTool } from './browser.tool'
 import { createDelegateTool } from './delegate.tool'
 import { createFilesystemTools } from './filesystem.tool'
+import { createCodeFsTools } from './code-fs.tool'
+import { readSkillFileTool } from './read-skill-file.tool'
 import { toolRegistry, type ToolInfo } from './registry'
 
 const DB_TOOLS: Tool[] = [dbTablesTool, dbQueryTool]
 // 注：plot_chart / data_analysis 已移除，可视化与统计分析统一由 python 工具（matplotlib/scipy/pandas）承担
 const AERO_TOOLS: Tool[] = [aeroCalculatorTool, calculatorTool, knowledgeSearchTool, runSkillScriptTool, pythonTool, browserTool, ...DB_TOOLS]
 const SIM_TOOLS: Tool[] = [calculatorTool, knowledgeSearchTool, runSkillScriptTool, pythonTool, browserTool, ...DB_TOOLS]
-const CALC_TOOLS: Tool[] = [calculatorTool, knowledgeSearchTool, runSkillScriptTool, pythonTool, browserTool, ...DB_TOOLS]
-const KB_TOOLS: Tool[] = [knowledgeSearchTool, runSkillScriptTool, ...DB_TOOLS]
+const CALC_TOOLS: Tool[] = [calculatorTool, knowledgeSearchTool, knowledgeGraphSearchTool, runSkillScriptTool, pythonTool, browserTool, ...DB_TOOLS]
+const KB_TOOLS: Tool[] = [knowledgeSearchTool, knowledgeGraphSearchTool, runSkillScriptTool, ...DB_TOOLS]
 // 文档类内置技能（docx/pdf/pptx/xlsx）依赖内联 Python 与内联 JS（docx-js/pptxgenjs）
 const DOC_TOOLS: Tool[] = [knowledgeSearchTool, runSkillScriptTool, pythonTool, nodeTool, ...DB_TOOLS]
 
@@ -40,13 +43,15 @@ const BUILTIN_TOOL_INFOS: Array<{ name: string; description: string; tool: Tool 
   { name: 'calculator', description: '通用数学计算器', tool: calculatorTool },
   { name: 'aero_calculator', description: '气动力公式计算（升力/阻力/雷诺数等）', tool: aeroCalculatorTool },
   { name: 'knowledge_search', description: '知识库检索', tool: knowledgeSearchTool },
+  { name: 'query_knowledge_graph', description: '查询知识图谱探索实体关系和知识网络', tool: knowledgeGraphSearchTool },
   { name: 'db_tables', description: '列出表格数据库中的数据表结构', tool: dbTablesTool },
   { name: 'db_query', description: '对表格数据库执行只读 SQL 查询', tool: dbQueryTool },
   { name: 'run_skill_script', description: '执行技能包附带脚本（.py/.js/.bat 等）', tool: runSkillScriptTool },
   { name: 'html_to_word', description: '将 HTML 文档转换为 Word 文档并可套用参考 Word 模板样式', tool: htmlToWordTool },
   { name: 'python', description: '执行内嵌 Python 3.8.10 代码（numpy/matplotlib/scipy/pandas 可用）用于计算与可视化', tool: pythonTool },
   { name: 'node', description: '执行内联 JavaScript（内置 Node + docx/pptxgenjs 库），用于生成 Word/PPT 等', tool: nodeTool },
-  { name: 'browser', description: '操作应用内嵌侧边栏浏览器（导航/点击/输入/滚动/截图/读取页面）', tool: browserTool }
+  { name: 'browser', description: '操作应用内嵌侧边栏浏览器（导航/点击/输入/滚动/截图/读取页面）', tool: browserTool },
+  { name: 'read_skill_file', description: '读取技能包内被 SKILL.md 引用的文件（渐进披露）', tool: readSkillFileTool }
 ]
 
 // 启动时把内置工具注册到 ToolRegistry（一次性，幂等）
@@ -64,6 +69,7 @@ export const AVAILABLE_TOOL_NAMES = [
   { name: 'calculator', description: '通用数学计算器' },
   { name: 'aero_calculator', description: '气动力公式计算（升力/阻力/雷诺数等）' },
   { name: 'knowledge_search', description: '知识库检索' },
+  { name: 'query_knowledge_graph', description: '查询知识图谱探索实体关系和知识网络' },
   { name: 'db_tables', description: '列出表格数据库中的数据表结构' },
   { name: 'db_query', description: '对表格数据库执行只读 SQL 查询' },
   { name: 'run_skill_script', description: '执行技能包附带脚本（.py/.js/.bat 等）' },
@@ -71,6 +77,7 @@ export const AVAILABLE_TOOL_NAMES = [
   { name: 'python', description: '执行内嵌 Python 3.8.10 代码（numpy/matplotlib/scipy/pandas 可用）用于计算与可视化' },
   { name: 'node', description: '执行内联 JavaScript（内置 Node + docx/pptxgenjs 库），用于生成 Word/PPT 等' },
   { name: 'browser', description: '操作应用内嵌侧边栏浏览器（导航/点击/输入/滚动/截图/读取页面）' },
+  { name: 'read_skill_file', description: '读取技能包内被 SKILL.md 引用的文件（渐进披露）' },
   { name: 'delegate_to_agent', description: '委派子任务给其他专业 Agent' }
 ]
 
@@ -169,9 +176,11 @@ export function getToolsForAgent(
   }
 
   // 设置了工作空间目录时，所有 agent 自动获得文件读写工具（读/写/列目录）
+  // 以及代码审查专用只读工具（目录树/带行号读取/代码搜索）
   // 路径安全由工具内部的白名单校验保证，仅可访问 fileWorkspacePath 内文件
   if (agentContext?.fileWorkspacePath) {
     tools.push(...createFilesystemTools({ context: agentContext }))
+    tools.push(...createCodeFsTools({ context: agentContext }))
   }
 
   return tools
